@@ -13,24 +13,20 @@ const (
 )
 
 const (
-	In  = 0
-	Out = 1
-)
-
-const (
-	V4 = "4"
-	V6 = "6"
+	V4   = "4"
+	V6   = "6"
+	Tcp  = "tcp"
+	Icmp = "icmp"
 )
 
 type CapThread struct {
-	Dir     int
 	BPF     string
 	Buffer  int
 	CapSize int
 }
 
-var capThreads = []CapThread{CapThread{Dir: In, BPF: "tcp", Buffer: 10000, CapSize: 100},
-	CapThread{Dir: Out, BPF: "tcp", Buffer: 10000, CapSize: 100}}
+var capThreads = []CapThread{CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100},
+	CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}}
 
 func checkFlags(version bool, iface string, proto string, ip string, port int) {
 	if version {
@@ -94,11 +90,17 @@ func main() {
 
 	go traceOut(outChan)
 
+	var localV4, localV6 net.IP
 	for _, thread := range capThreads {
 		ph := new(PcapHandler)
 		ph.NewPacketHandler(thread, iface, proto, ip, port, pktChan, outChan, done)
+		localV4 = ph.LocalV4
+		localV6 = ph.LocalV6
 		go ph.Run()
 	}
+	pa := new(PacketAnalyzer)
+	pa.NewPacketAnalyzer(pktChan, localV4, localV6)
+	pa.Run()
 
 	<-done
 }

@@ -14,15 +14,15 @@ type InputPkt struct {
 }
 
 type PcapHandler struct {
-	BufferMb   int
-	SnapLen    int
-	Filter     string
-	Iface      string
-	LocalNetv4 net.IPNet
-	LocalNetv6 net.IPNet
-	PktChan    chan InputPkt
-	OutChan    chan string
-	Done       chan bool
+	BufferMb int
+	SnapLen  int
+	Filter   string
+	Iface    string
+	LocalV4  net.IP
+	LocalV6  net.IP
+	PktChan  chan InputPkt
+	OutChan  chan string
+	Done     chan bool
 }
 
 func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto string, ip string, port int, pktChan chan InputPkt, outChan chan string, done chan bool) {
@@ -36,13 +36,7 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
-		panic(err)
-	}
-
-	if cap.Dir == In {
-		ph.Filter += " and dst "
-	} else {
-		ph.Filter += " and src "
+		log.Fatal(err)
 	}
 
 	validAddress := false
@@ -51,22 +45,21 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 		if iface.Name == ph.Iface {
 			netIface, err := net.InterfaceByName(ph.Iface)
 			if err != nil {
-				panic(err)
+				log.Fatal(err)
 			}
 			addrs, _ := netIface.Addrs()
 			for _, addr := range addrs {
 				switch v := addr.(type) {
 				case *net.IPNet:
 					if v.IP.IsGlobalUnicast() && v.IP.To4() != nil {
-						ph.LocalNetv4 = *v
-						ph.Filter += (*v).IP.String()
+						ph.LocalV4 = (*v).IP
 						if proto == V4 {
 							validAddress = true
 						}
 					} else if v.IP.IsGlobalUnicast() && v.IP.To16() != nil {
-						ph.LocalNetv6 = *v
-						ph.Filter += (*v).IP.String()
+						ph.LocalV6 = (*v).IP
 						if proto == V6 {
+							fmt.Printf("Local V6 %s\n", v.IP.String())
 							validAddress = true
 						}
 					}
@@ -76,19 +69,15 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 	}
 
 	if !validAddress {
-		panic("No valid IP for interface")
+		log.Fatal("No valid IP for interface")
 	}
 
-	if port != 0 {
+	if ip != "" && cap.BPF != Icmp {
+		ph.Filter += " and host " + ip
+	}
+
+	if port != 0 && cap.BPF != Icmp {
 		ph.Filter += " and port " + fmt.Sprintf("%d", port)
-	}
-
-	if ip != "" {
-		if cap.Dir == In {
-			ph.Filter += " and src " + ip
-		} else {
-			ph.Filter += " and dst " + ip
-		}
 	}
 }
 
@@ -100,7 +89,7 @@ func (ph *PcapHandler) Run() {
 
 	inactiveHandle.SetSnapLen(ph.SnapLen)
 	inactiveHandle.SetTimeout(pcap.BlockForever)
-	inactiveHandle.SetBufferSize(1000000 * ph.BufferMb)
+	inactiveHandle.SetBufferSize(1e6 * ph.BufferMb)
 
 	handle, err := inactiveHandle.Activate()
 	if err != nil {
