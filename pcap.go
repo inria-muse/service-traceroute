@@ -79,6 +79,7 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 	if port != 0 && cap.BPF != Icmp {
 		ph.Filter += " and port " + fmt.Sprintf("%d", port)
 	}
+	fmt.Printf("Filters %s\n", ph.Filter)
 }
 
 func (ph *PcapHandler) Run() {

@@ -98,9 +98,15 @@ func main() {
 		localV6 = ph.LocalV6
 		go ph.Run()
 	}
-	pa := new(PacketAnalyzer)
-	pa.NewPacketAnalyzer(pktChan, localV4, localV6)
-	pa.Run()
+
+	sendStartChan := make(chan bool)
+	r := new(Receiver)
+	r.NewReceiver(pktChan, localV4, localV6, sendStartChan)
+	go r.Run()
+
+	s := new(Sender)
+	s.NewSender(sendStartChan, iface, r)
+	s.Run()
 
 	<-done
 }
