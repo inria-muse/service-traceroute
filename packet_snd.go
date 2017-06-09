@@ -29,7 +29,6 @@ func (s *Sender) Run() {
 	defer handle.Close()
 
 	<-s.StartChan
-	log.Printf("AAAA starting send\n")
 
 	ethernetLayer := &layers.Ethernet{
 		SrcMAC:       s.R.LocalHw,
@@ -66,6 +65,7 @@ func (s *Sender) Run() {
 		ipLayer.TTL = uint8(i + 1)
 		tcpLayer.Seq = s.R.CurrSeq
 		tcpLayer.Ack = s.R.CurrAck
+		buf.Clear()
 
 		if err = tcpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
 			log.Fatal(err)
@@ -92,6 +92,7 @@ func (s *Sender) Run() {
 		}
 
 		log.Printf("packet sent! %s %s %d %d %d %d\n", s.R.LocalIp.String(), s.R.RemIp.String(), s.R.RemPort, s.R.LocalPort, s.R.CurrSeq, s.R.CurrAck)
+		time.Sleep(time.Millisecond * 100)
 	}
 
 }

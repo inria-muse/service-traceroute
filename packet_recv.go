@@ -95,9 +95,21 @@ func (r *Receiver) ParseTcpLayer(pkt InputPkt, dir int, ipDataLen uint32) error 
 	return nil
 }
 
-func (r *Receiver) ParseIpLayer(pkt InputPkt) (int, uint32, error) {
+func (r *Receiver) ParseIcmpLayer(pkt InputPkt, dir int) error {
+	if dir == Out {
+		return errors.New("Outgoing ICMP")
+	}
+	if icmp4Layer := pkt.Packet.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
+		ip, _ := pkt.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+		fmt.Printf("ICMP Pkt from %s\n", ip.SrcIP.String())
+	}
+	return nil
+}
+
+func (r *Receiver) ParseIpLayer(pkt InputPkt) (int, layers.IPProtocol, uint32, error) {
 	dir := Out
 	var ipDataLen uint32
+	var transport layers.IPProtocol
 
 	if ip4Layer := pkt.Packet.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
 		ip, _ := ip4Layer.(*layers.IPv4)
@@ -109,6 +121,7 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) (int, uint32, error) {
 			r.LocalIp = ip.DstIP
 			r.RemIp = ip.SrcIP
 		}
+		transport = ip.Protocol
 	} else if ip6Layer := pkt.Packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
 		ip, _ := ip6Layer.(*layers.IPv6)
 		r.LocalIp = ip.SrcIP
@@ -119,19 +132,26 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) (int, uint32, error) {
 			r.LocalIp = ip.DstIP
 			r.RemIp = ip.SrcIP
 		}
+		transport = ip.NextHeader
+
 	} else {
-		return 0, 0, errors.New("Not IP")
+		return 0, 0, 0, errors.New("Not IP")
 	}
-	return dir, ipDataLen, nil
+	return dir, transport, ipDataLen, nil
 }
 
 func (r *Receiver) Run() {
 	for {
 		pkt := <-r.PktChan
-		dir, ipDataLen, err := r.ParseIpLayer(pkt)
+		dir, transport, ipDataLen, err := r.ParseIpLayer(pkt)
 		if err != nil {
 			continue
 		}
-		r.ParseTcpLayer(pkt, dir, ipDataLen)
+		switch {
+		case transport == layers.IPProtocolTCP:
+			r.ParseTcpLayer(pkt, dir, ipDataLen)
+		case transport == layers.IPProtocolICMPv4 || transport == layers.IPProtocolICMPv6:
+			r.ParseIcmpLayer(pkt, dir)
+		}
 	}
 }
