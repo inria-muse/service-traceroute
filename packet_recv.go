@@ -128,14 +128,15 @@ func (r *Receiver) ParseTcpLayer(pkt InputPkt) error {
 }
 
 func (r *Receiver) ParseIcmpLayer(pkt InputPkt) error {
-	fmt.Printf("AAAA %d %d\n", r.Curr.Transport, r.Curr.Dir)
 	if r.Curr.Dir == Out {
 		return errors.New("Outgoing ICMP")
 	}
 	if icmp4Layer := pkt.Packet.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
 		r.Curr.Ip4, _ = pkt.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-		_, _ = icmp4Layer.(*layers.ICMPv4)
-		fmt.Printf("ICMP Pkt from %s\n", r.Curr.Ip4.SrcIP.String())
+		icmp, _ := icmp4Layer.(*layers.ICMPv4)
+		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
+			fmt.Printf("ICMP time exceeded from %s\n", r.Curr.Ip4.SrcIP.String())
+		}
 	}
 	//TODO: ICMPv6
 	return nil
