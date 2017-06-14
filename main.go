@@ -6,6 +6,8 @@ import (
 	"math"
 	"net"
 	"os"
+
+	"github.com/google/gopacket"
 )
 
 const (
@@ -104,9 +106,14 @@ func main() {
 	r.NewReceiver(pktChan, localV4, localV6, sendStartChan)
 	go r.Run()
 
+	sendQ := make(chan []gopacket.SerializableLayer)
 	s := new(Sender)
-	s.NewSender(sendStartChan, iface, r)
-	s.Run()
+	s.NewSender(iface, r, sendQ)
+	go s.Run()
+
+	bt := new(BufferTrace)
+	bt.NewBufferTrace(r, sendStartChan, sendQ)
+	go bt.Run()
 
 	<-done
 }
