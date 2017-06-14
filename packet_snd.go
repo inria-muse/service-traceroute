@@ -71,7 +71,6 @@ func (s *Sender) Run() {
 		}
 
 		log.Printf("packet sent!\n")
-		time.Sleep(time.Millisecond * 100)
 	}
 
 }

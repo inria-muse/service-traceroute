@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -57,6 +58,7 @@ func (bt *BufferTrace) SendPkts() {
 		tcpLayer.Ack = bt.R.Curr.Ack
 
 		bt.SendQ <- []gopacket.SerializableLayer{ethernetLayer, ipLayer, tcpLayer}
+		time.Sleep(time.Millisecond * 100)
 	}
 	bt.DoneSend <- true
 }
