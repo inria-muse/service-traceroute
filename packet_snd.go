@@ -12,19 +12,21 @@ import (
 )
 
 type Sender struct {
-	Iface string
-	R     *Receiver
-	SendQ chan []gopacket.SerializableLayer
+	Iface   string
+	R       *Receiver
+	SendQ   chan []gopacket.SerializableLayer
+	OutChan chan string
 }
 
-func (s *Sender) NewSender(iface string, r *Receiver, sendQ chan []gopacket.SerializableLayer) {
+func (s *Sender) NewSender(iface string, r *Receiver, outChan chan string) {
 	s.Iface = iface
 	s.R = r
-	s.SendQ = sendQ
+	s.SendQ = make(chan []gopacket.SerializableLayer, 1000)
+	s.OutChan = outChan
 }
 
 func (s *Sender) Run() {
-	fmt.Printf("Starting sender\n")
+	s.OutChan <- fmt.Sprintf("%d: Starting sender", time.Now().UnixNano())
 	handle, err := pcap.OpenLive(s.Iface, int32(100), false, time.Duration(30*time.Second))
 	if err != nil {
 		log.Fatal(err)
@@ -70,6 +72,6 @@ func (s *Sender) Run() {
 			log.Fatal(err)
 		}
 
-		fmt.Printf("packet sent!\n")
+		s.OutChan <- fmt.Sprintf("%d: packet sent!", time.Now().UnixNano())
 	}
 }

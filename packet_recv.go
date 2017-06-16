@@ -16,6 +16,7 @@ type Receiver struct {
 	SendStartChan chan bool
 	HasSentSend   bool
 	Curr          CurrStatus
+	OutChan       chan string
 }
 
 type CurrStatus struct {
@@ -43,15 +44,16 @@ const (
 	Out = 1
 )
 
-func (r *Receiver) NewReceiver(pktChan chan InputPkt, hostV4 net.IP, hostV6 net.IP, sendStartChan chan bool) {
+func (r *Receiver) NewReceiver(pktChan chan InputPkt, hostV4 net.IP, hostV6 net.IP, outChan chan string) {
 	r.PktChan = pktChan
 	r.LocalV4 = hostV4
 	r.LocalV6 = hostV6
-	r.SendStartChan = sendStartChan
+	r.SendStartChan = make(chan bool, 2)
 
 	r.Curr = CurrStatus{}
 	r.Curr.E2eLatencies = []float64{}
 	r.Curr.SeqMap = make(map[uint32]int64)
+	r.OutChan = outChan
 }
 
 func (r *Receiver) GetHardwareAddresses(pkt InputPkt) {
@@ -135,7 +137,7 @@ func (r *Receiver) ParseIcmpLayer(pkt InputPkt) error {
 		r.Curr.Ip4, _ = pkt.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
-			fmt.Printf("ICMP time exceeded from %s\n", r.Curr.Ip4.SrcIP.String())
+			r.OutChan <- fmt.Sprintf("%d: ICMP time exceeded from %s", time.Now().UnixNano(), r.Curr.Ip4.SrcIP.String())
 		}
 	}
 	//TODO: ICMPv6
@@ -179,7 +181,7 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 }
 
 func (r *Receiver) Run() {
-	fmt.Printf("Starting receiver\n")
+	r.OutChan <- fmt.Sprintf("%d: Starting receiver", time.Now().UnixNano())
 	for {
 		pkt := <-r.PktChan
 		err := r.ParseIpLayer(pkt)

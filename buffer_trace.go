@@ -9,21 +9,21 @@ import (
 )
 
 type BufferTrace struct {
-	StartChan chan bool
-	SendQ     chan []gopacket.SerializableLayer
-	R         *Receiver
-	DoneSend  chan bool
+	SendQ    chan []gopacket.SerializableLayer
+	R        *Receiver
+	DoneSend chan bool
+	OutChan  chan string
 }
 
-func (bt *BufferTrace) NewBufferTrace(r *Receiver, startChan chan bool, sendQ chan []gopacket.SerializableLayer) {
-	bt.StartChan = startChan
+func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.SerializableLayer, outChan chan string) {
 	bt.R = r
 	bt.SendQ = sendQ
 	bt.DoneSend = make(chan bool)
+	bt.OutChan = outChan
 }
 
 func (bt *BufferTrace) SendPkts() {
-	<-bt.StartChan
+	<-bt.R.SendStartChan
 
 	ethernetLayer := &layers.Ethernet{
 		SrcMAC:       bt.R.Curr.LocalHw,
@@ -52,7 +52,7 @@ func (bt *BufferTrace) SendPkts() {
 		Window:     0xffff,
 	}
 	for i := 0; i < 20; i++ {
-		fmt.Printf("Sending packet %d\n", i)
+		bt.OutChan <- fmt.Sprintf("%d: Sending packet %d", time.Now().UnixNano(), i)
 		ipLayer.TTL = uint8(i + 1)
 		ipLayer.Id = uint16(ipLayer.TTL)
 		tcpLayer.Seq = bt.R.Curr.Seq
@@ -65,7 +65,7 @@ func (bt *BufferTrace) SendPkts() {
 }
 
 func (bt *BufferTrace) Run() {
-	fmt.Printf("Starting buffertrace experiment\n")
+	bt.OutChan <- fmt.Sprintf("%d: Starting buffertrace experiment", time.Now().UnixNano())
 	go bt.SendPkts()
 	<-bt.DoneSend
 }

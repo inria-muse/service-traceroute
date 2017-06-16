@@ -6,8 +6,6 @@ import (
 	"math"
 	"net"
 	"os"
-
-	"github.com/google/gopacket"
 )
 
 const (
@@ -61,7 +59,7 @@ func traceOut(outChan chan string) {
 	for {
 		select {
 		case s := <-outChan:
-			fmt.Printf("%s", s)
+			fmt.Printf("%s\n", s)
 		}
 	}
 }
@@ -101,18 +99,16 @@ func main() {
 		go ph.Run()
 	}
 
-	sendStartChan := make(chan bool, 2)
 	r := new(Receiver)
-	r.NewReceiver(pktChan, localV4, localV6, sendStartChan)
+	r.NewReceiver(pktChan, localV4, localV6, outChan)
 	go r.Run()
 
-	sendQ := make(chan []gopacket.SerializableLayer, 1000)
 	s := new(Sender)
-	s.NewSender(iface, r, sendQ)
+	s.NewSender(iface, r, outChan)
 	go s.Run()
 
 	bt := new(BufferTrace)
-	bt.NewBufferTrace(r, sendStartChan, sendQ)
+	bt.NewBufferTrace(r, s.SendQ, outChan)
 	go bt.Run()
 
 	<-done
