@@ -70,7 +70,6 @@ func (s *Sender) Run() {
 			log.Fatal(err)
 		}
 
-		log.Printf("packet sent!\n")
+		fmt.Printf("packet sent!\n")
 	}
-
 }
