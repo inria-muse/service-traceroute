@@ -51,14 +51,15 @@ func (bt *BufferTrace) SendPkts() {
 		ACK:        true,
 		Window:     0xffff,
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 20; i++ {
+		fmt.Printf("Sending packet %d\n", i)
 		ipLayer.TTL = uint8(i + 1)
 		ipLayer.Id = uint16(ipLayer.TTL)
 		tcpLayer.Seq = bt.R.Curr.Seq
 		tcpLayer.Ack = bt.R.Curr.Ack
 
 		bt.SendQ <- []gopacket.SerializableLayer{ethernetLayer, ipLayer, tcpLayer}
-		time.Sleep(time.Millisecond * 100)
+		<-time.After(time.Millisecond * 10)
 	}
 	bt.DoneSend <- true
 }
