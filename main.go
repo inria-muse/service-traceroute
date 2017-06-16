@@ -101,12 +101,12 @@ func main() {
 		go ph.Run()
 	}
 
-	sendStartChan := make(chan bool)
+	sendStartChan := make(chan bool, 2)
 	r := new(Receiver)
 	r.NewReceiver(pktChan, localV4, localV6, sendStartChan)
 	go r.Run()
 
-	sendQ := make(chan []gopacket.SerializableLayer)
+	sendQ := make(chan []gopacket.SerializableLayer, 1000)
 	s := new(Sender)
 	s.NewSender(iface, r, sendQ)
 	go s.Run()
