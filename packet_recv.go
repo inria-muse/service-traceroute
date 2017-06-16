@@ -137,7 +137,7 @@ func (r *Receiver) ParseIcmpLayer(pkt InputPkt) error {
 		r.Curr.Ip4, _ = pkt.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
-			r.OutChan <- fmt.Sprintf("%d: ICMP time exceeded from %s", time.Now().UnixNano(), r.Curr.Ip4.SrcIP.String())
+			r.OutChan <- fmt.Sprintf("%.3f: ICMP time exceeded from %s", float64(time.Now().UnixNano())/float64(time.Millisecond), r.Curr.Ip4.SrcIP.String())
 		}
 	}
 	//TODO: ICMPv6
@@ -181,7 +181,7 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 }
 
 func (r *Receiver) Run() {
-	r.OutChan <- fmt.Sprintf("%d: Starting receiver", time.Now().UnixNano())
+	r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	for {
 		pkt := <-r.PktChan
 		err := r.ParseIpLayer(pkt)

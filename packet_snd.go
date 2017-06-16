@@ -26,7 +26,7 @@ func (s *Sender) NewSender(iface string, r *Receiver, outChan chan string) {
 }
 
 func (s *Sender) Run() {
-	s.OutChan <- fmt.Sprintf("%d: Starting sender", time.Now().UnixNano())
+	s.OutChan <- fmt.Sprintf("%.3f: Starting sender", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	handle, err := pcap.OpenLive(s.Iface, int32(100), false, time.Duration(30*time.Second))
 	if err != nil {
 		log.Fatal(err)
@@ -72,6 +72,6 @@ func (s *Sender) Run() {
 			log.Fatal(err)
 		}
 
-		s.OutChan <- fmt.Sprintf("%d: packet sent!", time.Now().UnixNano())
+		s.OutChan <- fmt.Sprintf("%.3f: packet sent!", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	}
 }

@@ -52,7 +52,7 @@ func (bt *BufferTrace) SendPkts() {
 		Window:     0xffff,
 	}
 	for i := 0; i < 20; i++ {
-		bt.OutChan <- fmt.Sprintf("%d: Sending packet %d", time.Now().UnixNano(), i)
+		bt.OutChan <- fmt.Sprintf("%.3f: Sending packet %d", float64(time.Now().UnixNano())/float64(time.Millisecond), i)
 		ipLayer.TTL = uint8(i + 1)
 		ipLayer.Id = uint16(ipLayer.TTL)
 		tcpLayer.Seq = bt.R.Curr.Seq
@@ -65,7 +65,7 @@ func (bt *BufferTrace) SendPkts() {
 }
 
 func (bt *BufferTrace) Run() {
-	bt.OutChan <- fmt.Sprintf("%d: Starting buffertrace experiment", time.Now().UnixNano())
+	bt.OutChan <- fmt.Sprintf("%.3f: Starting buffertrace experiment", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	go bt.SendPkts()
 	<-bt.DoneSend
 }
