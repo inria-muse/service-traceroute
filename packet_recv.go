@@ -85,9 +85,9 @@ func (r *Receiver) IsProbePacket(pkt InputPkt, tcp *layers.TCP) bool {
 
 func (r *Receiver) ParseTcpOut(pkt InputPkt, tcp *layers.TCP) {
 	if r.IsProbePacket(pkt, tcp) {
-		ip4L := pkt.Packet.Layer(layers.LayerTypeIPv4)
-		ip4, _ := ip4L.(*layers.IPv4)
-		fmt.Printf("Saw probe packet %+v\n", ip4)
+		//ip4L := pkt.Packet.Layer(layers.LayerTypeIPv4)
+		//ip4, _ := ip4L.(*layers.IPv4)
+		//fmt.Printf("Saw probe packet %+v\n", ip4)
 	}
 
 	if len(tcp.Payload) == 0 {
