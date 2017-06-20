@@ -90,7 +90,6 @@ func (bt *BufferTrace) SendPkts() {
 }
 
 func (bt *BufferTrace) AnalyzePackets() {
-	bt.OutChan <- fmt.Sprintf("%.3f Experiment analysis engine", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	for {
 		select {
 		case c := <-bt.R.FlowOutChan:
@@ -103,14 +102,15 @@ func (bt *BufferTrace) AnalyzePackets() {
 		case c := <-bt.R.ProbeOutChan:
 			bt.ProbeIdMap[c.IpId] = c.Ts
 		case c := <-bt.R.ProbeInChan:
-			var id uint16 = binary.BigEndian.Uint16(c.IcmpPayload[4:6]) % uint16(bt.MaxTtl)
+			var id uint16 = binary.BigEndian.Uint16(c.IcmpPayload[4:6])
 			if oTs, ok := bt.ProbeIdMap[id]; ok {
 				hIp := c.RemIp.String()
 				hl := HopLatency{Ip: hIp, Rtt: c.Ts - oTs}
-				if _, ok := bt.HopLatencies[id]; ok {
-					bt.HopLatencies[id] = append(bt.HopLatencies[id], hl)
+				idMap := id % uint16(bt.MaxTtl)
+				if _, ok := bt.HopLatencies[idMap]; ok {
+					bt.HopLatencies[idMap] = append(bt.HopLatencies[idMap], hl)
 				} else {
-					bt.HopLatencies[id] = []HopLatency{hl}
+					bt.HopLatencies[idMap] = []HopLatency{hl}
 				}
 				delete(bt.ProbeIdMap, id)
 			}
@@ -125,6 +125,7 @@ func (bt *BufferTrace) PrintLatencies() {
 			bt.OutChan <- fmt.Sprintf("Hop %d: Latencies: %+v", i, h)
 		}
 	}
+	bt.OutChan <- fmt.Sprintf("E2E Latencies: %+v", bt.E2eLatencies)
 }
 
 func (bt *BufferTrace) Run() {
