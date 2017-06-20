@@ -83,7 +83,7 @@ func (r *Receiver) ParseTcpIn(pkt InputPkt, tcp *layers.TCP) {
 
 func (r *Receiver) IsProbePacket(pkt InputPkt, tcp *layers.TCP) bool {
 	if r.Curr.Ip4 != nil {
-		if r.Curr.Ip4.TTL < 32 && r.Curr.Ip4.Id == uint16(r.Curr.Ip4.TTL) {
+		if r.Curr.Ip4.TTL <= 32 {
 			return true
 		}
 	}
