@@ -103,7 +103,7 @@ func (bt *BufferTrace) AnalyzePackets() {
 		case c := <-bt.R.ProbeOutChan:
 			bt.ProbeIdMap[c.IpId] = c.Ts
 		case c := <-bt.R.ProbeInChan:
-			var id uint16 = binary.BigEndian.Uint16(c.IcmpPayload[4:6])
+			var id uint16 = binary.BigEndian.Uint16(c.IcmpPayload[4:6]) % uint16(bt.MaxTtl)
 			if oTs, ok := bt.ProbeIdMap[id]; ok {
 				hIp := c.RemIp.String()
 				hl := HopLatency{Ip: hIp, Rtt: c.Ts - oTs}
