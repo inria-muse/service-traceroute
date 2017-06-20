@@ -20,9 +20,14 @@ type BufferTrace struct {
 	ProbeIdMap   map[uint16]int64
 	ProbeSeqMap  map[uint16]int64
 	E2eLatencies []int64
-	HopLatencies map[string][]int64
+	HopLatencies map[uint16][]HopLatency
 	DoneSend     chan bool
 	OutChan      chan string
+}
+
+type HopLatency struct {
+	Ip  string
+	Rtt int64
 }
 
 func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.SerializableLayer, outChan chan string) {
@@ -35,7 +40,7 @@ func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.Seriali
 	bt.FlowSeqMap = make(map[uint32]int64)
 	bt.ProbeIdMap = make(map[uint16]int64)
 	bt.E2eLatencies = []int64{}
-	bt.HopLatencies = make(map[string][]int64)
+	bt.HopLatencies = make(map[uint16][]HopLatency)
 	bt.DoneSend = make(chan bool)
 	bt.OutChan = outChan
 }
@@ -101,13 +106,23 @@ func (bt *BufferTrace) AnalyzePackets() {
 			var id uint16 = binary.BigEndian.Uint16(c.IcmpPayload[4:6])
 			if oTs, ok := bt.ProbeIdMap[id]; ok {
 				hIp := c.RemIp.String()
-				if _, ok := bt.HopLatencies[hIp]; ok {
-					bt.HopLatencies[hIp] = append(bt.HopLatencies[hIp], c.Ts-oTs)
+				hl := HopLatency{Ip: hIp, Rtt: c.Ts - oTs}
+				if _, ok := bt.HopLatencies[id]; ok {
+					bt.HopLatencies[id] = append(bt.HopLatencies[id], hl)
 				} else {
-					bt.HopLatencies[hIp] = []int64{c.Ts - oTs}
+					bt.HopLatencies[id] = []HopLatency{hl}
 				}
 				delete(bt.ProbeIdMap, id)
 			}
+		}
+	}
+}
+
+func (bt *BufferTrace) PrintLatencies() {
+	bt.OutChan <- fmt.Sprintf("\nPrinting latencies:")
+	for i := 1; i <= bt.MaxTtl; i++ {
+		if h, ok := bt.HopLatencies[uint16(i)]; ok {
+			bt.OutChan <- fmt.Sprintf("Hop %d: Latencies: %+v", i, h)
 		}
 	}
 }
@@ -117,4 +132,7 @@ func (bt *BufferTrace) Run() {
 	go bt.AnalyzePackets()
 	go bt.SendPkts()
 	<-bt.DoneSend
+	bt.OutChan <- fmt.Sprintf("Done sending probes")
+	<-time.After(time.Second * 2)
+	bt.PrintLatencies()
 }
