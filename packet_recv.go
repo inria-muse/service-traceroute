@@ -17,26 +17,33 @@ type Receiver struct {
 	HasSentSend   bool
 	Curr          CurrStatus
 	OutChan       chan string
+	FlowOutChan   chan CurrStatus
+	FlowInChan    chan CurrStatus
+	ProbeOutChan  chan CurrStatus
+	ProbeInChan   chan CurrStatus
 }
 
 type CurrStatus struct {
-	LocalIp      net.IP
-	RemIp        net.IP
-	LocalHw      net.HardwareAddr
-	RemHw        net.HardwareAddr
-	SeqMap       map[uint32]int64
-	TCPLocalIp   net.IP
-	TCPRemIp     net.IP
-	LocalPort    layers.TCPPort
-	RemPort      layers.TCPPort
-	Seq          uint32
-	Ack          uint32
-	Ip4          *layers.IPv4
-	Ip6          *layers.IPv6
-	Dir          int
-	IpDataLen    uint32
-	Transport    layers.IPProtocol
-	E2eLatencies []float64
+	Ts          int64
+	LocalHw     net.HardwareAddr
+	RemHw       net.HardwareAddr
+	LocalIp     net.IP
+	RemIp       net.IP
+	TCPLocalIp  net.IP
+	TCPRemIp    net.IP
+	IpId        uint16
+	IpTtl       uint8
+	LocalPort   layers.TCPPort
+	RemPort     layers.TCPPort
+	Seq         uint32
+	Ack         uint32
+	TcpHLen     uint32
+	Ip4         *layers.IPv4
+	Ip6         *layers.IPv6
+	Dir         int
+	IpDataLen   uint32
+	Transport   layers.IPProtocol
+	IcmpPayload []byte
 }
 
 const (
@@ -51,9 +58,12 @@ func (r *Receiver) NewReceiver(pktChan chan InputPkt, hostV4 net.IP, hostV6 net.
 	r.SendStartChan = make(chan bool, 2)
 
 	r.Curr = CurrStatus{}
-	r.Curr.E2eLatencies = []float64{}
-	r.Curr.SeqMap = make(map[uint32]int64)
 	r.OutChan = outChan
+
+	r.FlowOutChan = make(chan CurrStatus, 100000)
+	r.FlowInChan = make(chan CurrStatus, 100000)
+	r.ProbeOutChan = make(chan CurrStatus, 100000)
+	r.ProbeInChan = make(chan CurrStatus, 100000)
 }
 
 func (r *Receiver) GetHardwareAddresses(pkt InputPkt) {
@@ -64,15 +74,11 @@ func (r *Receiver) GetHardwareAddresses(pkt InputPkt) {
 }
 
 func (r *Receiver) ParseTcpIn(pkt InputPkt, tcp *layers.TCP) {
-	pts := pkt.Packet.Metadata().Timestamp.UnixNano()
-	if sts, ok := r.Curr.SeqMap[tcp.Ack]; ok == true {
-		r.Curr.E2eLatencies = append(r.Curr.E2eLatencies, float64(pts-sts)/float64(time.Millisecond))
-		delete(r.Curr.SeqMap, tcp.Ack)
-	}
-	r.Curr.Ack = tcp.Seq
 	if tcp.SYN == true {
 		r.Curr.Ack++
 	}
+	var c CurrStatus = r.Curr
+	r.FlowInChan <- c
 }
 
 func (r *Receiver) IsProbePacket(pkt InputPkt, tcp *layers.TCP) bool {
@@ -87,18 +93,15 @@ func (r *Receiver) IsProbePacket(pkt InputPkt, tcp *layers.TCP) bool {
 
 func (r *Receiver) ParseTcpOut(pkt InputPkt, tcp *layers.TCP) {
 	if r.IsProbePacket(pkt, tcp) {
-		//ip4L := pkt.Packet.Layer(layers.LayerTypeIPv4)
-		//ip4, _ := ip4L.(*layers.IPv4)
-		//fmt.Printf("Saw probe packet %+v\n", ip4)
+		var c CurrStatus = r.Curr
+		r.ProbeOutChan <- c
+		return
 	}
 
 	if len(tcp.Payload) == 0 {
 		return
 	}
 
-	seq := tcp.Seq + r.Curr.IpDataLen - uint32(tcp.DataOffset*4)
-	r.Curr.SeqMap[seq] = pkt.Packet.Metadata().Timestamp.UnixNano()
-	r.Curr.Seq = seq
 	if tcp.SYN == true {
 		r.Curr.Seq++
 	}
@@ -112,6 +115,8 @@ func (r *Receiver) ParseTcpOut(pkt InputPkt, tcp *layers.TCP) {
 		r.SendStartChan <- true
 		r.HasSentSend = true
 	}
+	var c CurrStatus = r.Curr
+	r.FlowOutChan <- c
 }
 
 func (r *Receiver) ParseTcpLayer(pkt InputPkt) error {
@@ -121,6 +126,9 @@ func (r *Receiver) ParseTcpLayer(pkt InputPkt) error {
 	}
 
 	tcp, _ := tcpLayer.(*layers.TCP)
+	r.Curr.Seq = tcp.Seq
+	r.Curr.Ack = tcp.Ack
+	r.Curr.TcpHLen = uint32(tcp.DataOffset * 4)
 	if r.Curr.Dir == In {
 		r.ParseTcpIn(pkt, tcp)
 	} else {
@@ -134,10 +142,12 @@ func (r *Receiver) ParseIcmpLayer(pkt InputPkt) error {
 		return errors.New("Outgoing ICMP")
 	}
 	if icmp4Layer := pkt.Packet.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
-		r.Curr.Ip4, _ = pkt.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
-			r.OutChan <- fmt.Sprintf("%.3f: ICMP time exceeded from %s", float64(time.Now().UnixNano())/float64(time.Millisecond), r.Curr.Ip4.SrcIP.String())
+			var c CurrStatus = r.Curr
+			c.IcmpPayload = make([]byte, len(icmp.LayerPayload()))
+			copy(c.IcmpPayload, icmp.LayerPayload())
+			r.ProbeInChan <- c
 		}
 	}
 	//TODO: ICMPv6
@@ -149,6 +159,8 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 		r.Curr.Ip4 = ip4Layer.(*layers.IPv4)
 		r.Curr.Ip6 = nil
 		r.Curr.IpDataLen = uint32(r.Curr.Ip4.Length - 4*uint16(r.Curr.Ip4.IHL))
+		r.Curr.IpId = r.Curr.Ip4.Id
+		r.Curr.IpTtl = r.Curr.Ip4.TTL
 		if r.Curr.Ip4.DstIP.String() == r.LocalV4.String() {
 			r.Curr.Dir = In
 			r.Curr.LocalIp = r.Curr.Ip4.DstIP
@@ -163,6 +175,7 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 		r.Curr.Ip6 = ip6Layer.(*layers.IPv6)
 		r.Curr.Ip4 = nil
 		r.Curr.IpDataLen = uint32(r.Curr.Ip6.Length)
+		r.Curr.IpTtl = r.Curr.Ip6.HopLimit // TODO Check if this does the job of v4 TTL
 		if r.Curr.Ip6.DstIP.String() == r.LocalV6.String() {
 			r.Curr.Dir = In
 			r.Curr.LocalIp = r.Curr.Ip6.DstIP
@@ -184,6 +197,7 @@ func (r *Receiver) Run() {
 	r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	for {
 		pkt := <-r.PktChan
+		r.Curr.Ts = pkt.Packet.Metadata().Timestamp.UnixNano()
 		err := r.ParseIpLayer(pkt)
 		if err != nil {
 			continue
