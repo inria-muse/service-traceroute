@@ -10,22 +10,32 @@ import (
 )
 
 type BufferTrace struct {
+	MaxTtl       int
+	Iter         int
+	InterProbe   int
+	InterIter    int
 	SendQ        chan []gopacket.SerializableLayer
 	R            *Receiver
 	FlowSeqMap   map[uint32]int64
 	ProbeIdMap   map[uint16]int64
 	ProbeSeqMap  map[uint16]int64
-	E2eLatencies []float64
+	E2eLatencies []int64
+	HopLatencies map[string][]int64
 	DoneSend     chan bool
 	OutChan      chan string
 }
 
 func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.SerializableLayer, outChan chan string) {
+	bt.MaxTtl = 32     //hardcoding for now
+	bt.Iter = 10       //hardcoding for now
+	bt.InterProbe = 10 //harcoding for now
+	bt.InterIter = 100 //hardcoding for now
 	bt.SendQ = sendQ
 	bt.R = r
 	bt.FlowSeqMap = make(map[uint32]int64)
 	bt.ProbeIdMap = make(map[uint16]int64)
-	bt.E2eLatencies = []float64{}
+	bt.E2eLatencies = []int64{}
+	bt.HopLatencies = make(map[string][]int64)
 	bt.DoneSend = make(chan bool)
 	bt.OutChan = outChan
 }
@@ -59,14 +69,17 @@ func (bt *BufferTrace) SendPkts() {
 		ACK:        true,
 		Window:     0xffff,
 	}
-	for i := 0; i < 20; i++ {
-		ipLayer.TTL = uint8(i + 1)
-		ipLayer.Id = uint16(ipLayer.TTL)
-		tcpLayer.Seq = bt.R.Curr.Seq
-		tcpLayer.Ack = bt.R.Curr.Ack
+	for i := 0; i < bt.Iter; i++ {
+		for j := 0; j < bt.MaxTtl; j++ {
+			ipLayer.TTL = uint8(j + 1)
+			ipLayer.Id = uint16(i*bt.MaxTtl + j + 1)
+			tcpLayer.Seq = bt.R.Curr.Seq
+			tcpLayer.Ack = bt.R.Curr.Ack
 
-		bt.SendQ <- []gopacket.SerializableLayer{ethernetLayer, ipLayer, tcpLayer}
-		<-time.After(time.Millisecond * 10)
+			bt.SendQ <- []gopacket.SerializableLayer{ethernetLayer, ipLayer, tcpLayer}
+			<-time.After(time.Millisecond * time.Duration(bt.InterProbe))
+		}
+		<-time.After(time.Millisecond * time.Duration(bt.InterIter))
 	}
 	bt.DoneSend <- true
 }
@@ -79,7 +92,7 @@ func (bt *BufferTrace) AnalyzePackets() {
 			bt.FlowSeqMap[c.Seq+c.IpDataLen-c.TcpHLen] = c.Ts
 		case c := <-bt.R.FlowInChan:
 			if sts, ok := bt.FlowSeqMap[c.Ack]; ok == true {
-				bt.E2eLatencies = append(bt.E2eLatencies, float64(c.Ts-sts)/float64(time.Millisecond))
+				bt.E2eLatencies = append(bt.E2eLatencies, c.Ts-sts)
 				delete(bt.FlowSeqMap, c.Ack)
 			}
 		case c := <-bt.R.ProbeOutChan:
@@ -87,7 +100,12 @@ func (bt *BufferTrace) AnalyzePackets() {
 		case c := <-bt.R.ProbeInChan:
 			var id uint16 = binary.BigEndian.Uint16(c.IcmpPayload[4:6])
 			if oTs, ok := bt.ProbeIdMap[id]; ok {
-				bt.OutChan <- fmt.Sprintf("Probe latency from %s (hop %d): %.3f", c.RemIp.String(), id, float64(c.Ts-oTs)/float64(time.Millisecond))
+				hIp := c.RemIp.String()
+				if _, ok := bt.HopLatencies[hIp]; ok {
+					bt.HopLatencies[hIp] = append(bt.HopLatencies[hIp], c.Ts-oTs)
+				} else {
+					bt.HopLatencies[hIp] = []int64{c.Ts - oTs}
+				}
 				delete(bt.ProbeIdMap, id)
 			}
 		}
