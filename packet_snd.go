@@ -71,7 +71,5 @@ func (s *Sender) Run() {
 		if err = handle.WritePacketData(buf.Bytes()); err != nil {
 			log.Fatal(err)
 		}
-
-		s.OutChan <- fmt.Sprintf("%.3f: packet sent!", float64(time.Now().UnixNano())/float64(time.Millisecond))
 	}
 }
