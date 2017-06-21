@@ -50,7 +50,7 @@ func checkFlags(version bool, iface string, proto string, ip string, port int) {
 		}
 	}
 
-	if port < 0 || port > math.MaxInt16 {
+	if port < 0 || port > math.MaxUint16 {
 		panic("Bad port")
 	}
 }
