@@ -74,6 +74,7 @@ func (bt *BufferTrace) SendPkts() {
 		ACK:        true,
 		Window:     0xffff,
 	}
+	bt.OutChan <- fmt.Sprintf("Sending probes")
 	for i := 0; i < bt.Iter; i++ {
 		for j := 0; j < bt.MaxTtl; j++ {
 			ipLayer.TTL = uint8(j + 1)
@@ -86,6 +87,7 @@ func (bt *BufferTrace) SendPkts() {
 		}
 		<-time.After(time.Millisecond * time.Duration(bt.InterIter))
 	}
+	bt.OutChan <- fmt.Sprintf("Done sending probes")
 	bt.DoneSend <- true
 }
 
@@ -107,11 +109,14 @@ func (bt *BufferTrace) AnalyzePackets() {
 				hIp := c.RemIp.String()
 				hl := HopLatency{Ip: hIp, Rtt: c.Ts - oTs}
 				idMap := id % uint16(bt.MaxTtl)
-				if _, ok := bt.HopLatencies[idMap]; ok {
-					bt.HopLatencies[idMap] = append(bt.HopLatencies[idMap], hl)
-				} else {
-					bt.HopLatencies[idMap] = []HopLatency{hl}
+				iter := id / uint16(bt.MaxTtl)
+				if iter > uint16(bt.Iter) {
+					//log
 				}
+				if _, ok := bt.HopLatencies[idMap]; !ok {
+					bt.HopLatencies[idMap] = make([]HopLatency, bt.Iter)
+				}
+				bt.HopLatencies[idMap][iter] = hl
 				delete(bt.ProbeIdMap, id)
 			}
 		}
@@ -119,13 +124,48 @@ func (bt *BufferTrace) AnalyzePackets() {
 }
 
 func (bt *BufferTrace) PrintLatencies() {
-	bt.OutChan <- fmt.Sprintf("\nPrinting latencies:")
+	out := "\t\t====BufferTrace latencies====\n\n"
+	blankOut := ""
+	reachedDst := false
 	for i := 1; i <= bt.MaxTtl; i++ {
+		prevIp := ""
 		if h, ok := bt.HopLatencies[uint16(i)]; ok {
-			bt.OutChan <- fmt.Sprintf("Hop %d: Latencies: %+v", i, h)
+			out += blankOut
+			blankOut = ""
+			out += fmt.Sprintf("%d\t", i)
+			for j := 0; j < bt.Iter; j++ {
+				if h[j].Rtt == 0 {
+					out += "*\t"
+				} else {
+					if h[j].Ip != prevIp {
+						prevIp = h[j].Ip
+						out += fmt.Sprintf("(%s", prevIp)
+						if h[j].Ip == bt.R.Curr.TCPRemIp.String() {
+							out += fmt.Sprintf(" NAT")
+							reachedDst = true
+						}
+						out += fmt.Sprintf(") ")
+					}
+					out += fmt.Sprintf("%.2f\t", float64(h[j].Rtt)/float64(time.Millisecond))
+				}
+
+			}
+			out += "\n"
+		} else {
+			blankOut += fmt.Sprintf("%d\t*\n", i)
 		}
 	}
-	bt.OutChan <- fmt.Sprintf("E2E Latencies: %+v", bt.E2eLatencies)
+	if !reachedDst {
+		out += blankOut
+	}
+	step := len(bt.E2eLatencies) / bt.Iter
+
+	out += fmt.Sprintf("E2E\t")
+	for i := 0; i < len(bt.E2eLatencies); i += step + 1 {
+		out += fmt.Sprintf("%.2f\t", float64(bt.E2eLatencies[i])/float64(time.Millisecond))
+	}
+	out += "\n"
+	bt.OutChan <- out
 }
 
 func (bt *BufferTrace) Run() {
@@ -133,7 +173,6 @@ func (bt *BufferTrace) Run() {
 	go bt.AnalyzePackets()
 	go bt.SendPkts()
 	<-bt.DoneSend
-	bt.OutChan <- fmt.Sprintf("Done sending probes")
 	<-time.After(time.Second * 2)
 	bt.PrintLatencies()
 }
