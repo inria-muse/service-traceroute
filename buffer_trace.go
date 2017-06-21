@@ -74,8 +74,9 @@ func (bt *BufferTrace) SendPkts() {
 		ACK:        true,
 		Window:     0xffff,
 	}
-	bt.OutChan <- fmt.Sprintf("Sending probes")
+	bt.OutChan <- fmt.Sprintf("Sending probe iterations...")
 	for i := 0; i < bt.Iter; i++ {
+		bt.OutChan <- fmt.Sprintf("\t%d...", i)
 		for j := 0; j < bt.MaxTtl; j++ {
 			ipLayer.TTL = uint8(j + 1)
 			ipLayer.Id = uint16(i*bt.MaxTtl + j + 1)
