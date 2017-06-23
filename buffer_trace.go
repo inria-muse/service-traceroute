@@ -75,18 +75,30 @@ func (bt *BufferTrace) SendPkts() {
 		Window:     0xffff,
 	}
 	bt.OutChan <- fmt.Sprintf("Sending probe iterations...")
-	for i := 0; i < bt.Iter; i++ {
+	iT := time.NewTicker(time.Millisecond * time.Duration(bt.InterIter+bt.InterProbe*bt.MaxTtl))
+	i := 0
+	for _ = range iT.C {
 		bt.OutChan <- fmt.Sprintf("\t%d...", i)
-		for j := 0; j < bt.MaxTtl; j++ {
-			ipLayer.TTL = uint8(j + 1)
-			ipLayer.Id = uint16(i*bt.MaxTtl + j + 1)
+		pT := time.NewTicker(time.Millisecond * time.Duration(bt.InterProbe))
+		j := 1
+		for _ = range pT.C {
+			ipLayer.TTL = uint8(j)
+			ipLayer.Id = uint16(i*bt.MaxTtl + j)
 			tcpLayer.Seq = bt.R.Curr.Seq
 			tcpLayer.Ack = bt.R.Curr.Ack
 
 			bt.SendQ <- []gopacket.SerializableLayer{ethernetLayer, ipLayer, tcpLayer}
-			<-time.After(time.Millisecond * time.Duration(bt.InterProbe))
+			j++
+			if j > bt.MaxTtl {
+				pT.Stop()
+				break
+			}
 		}
-		<-time.After(time.Millisecond * time.Duration(bt.InterIter))
+		i++
+		if i == bt.Iter {
+			iT.Stop()
+			break
+		}
 	}
 	bt.OutChan <- fmt.Sprintf("Done sending probes")
 	bt.DoneSend <- true
