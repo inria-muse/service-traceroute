@@ -108,7 +108,7 @@ func main() {
 	go s.Run()
 
 	bt := new(BufferTrace)
-	bt.NewBufferTrace(r, s.SendQ, outChan)
+	bt.NewBufferTrace(r, s.SendQ, outChan, done)
 	go bt.Run()
 
 	<-done

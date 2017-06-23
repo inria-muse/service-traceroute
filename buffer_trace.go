@@ -23,6 +23,7 @@ type BufferTrace struct {
 	HopLatencies map[uint16][]HopLatency
 	DoneSend     chan bool
 	OutChan      chan string
+	DoneExp      chan bool
 }
 
 type HopLatency struct {
@@ -30,7 +31,7 @@ type HopLatency struct {
 	Rtt int64
 }
 
-func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.SerializableLayer, outChan chan string) {
+func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.SerializableLayer, outChan chan string, done chan bool) {
 	bt.MaxTtl = 32     //hardcoding for now
 	bt.Iter = 10       //hardcoding for now
 	bt.InterProbe = 10 //harcoding for now
@@ -43,6 +44,7 @@ func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.Seriali
 	bt.HopLatencies = make(map[uint16][]HopLatency)
 	bt.DoneSend = make(chan bool)
 	bt.OutChan = outChan
+	bt.DoneExp = done
 }
 
 func (bt *BufferTrace) SendPkts() {
@@ -179,6 +181,7 @@ func (bt *BufferTrace) PrintLatencies() {
 	}
 	out += "\n"
 	bt.OutChan <- out
+	time.Sleep(time.Second)
 }
 
 func (bt *BufferTrace) Run() {
@@ -188,4 +191,5 @@ func (bt *BufferTrace) Run() {
 	<-bt.DoneSend
 	<-time.After(time.Second * 2)
 	bt.PrintLatencies()
+	bt.DoneExp <- true
 }
