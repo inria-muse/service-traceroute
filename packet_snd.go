@@ -21,7 +21,7 @@ type Sender struct {
 func (s *Sender) NewSender(iface string, r *Receiver, outChan chan string) {
 	s.Iface = iface
 	s.R = r
-	s.SendQ = make(chan []gopacket.SerializableLayer, 1000)
+	s.SendQ = make(chan []gopacket.SerializableLayer, 10000)
 	s.OutChan = outChan
 }
 
