@@ -36,40 +36,40 @@ func (s *Sender) Run() {
 	buf := gopacket.NewSerializeBuffer()
 
 	for {
-		outPktL := <-s.SendQ
+		select {
+		case outPktL := <-s.SendQ:
+			buf.Clear()
+			optsCSum := gopacket.SerializeOptions{
+				ComputeChecksums: true,
+			}
 
-		buf.Clear()
-
-		optsCSum := gopacket.SerializeOptions{
-			ComputeChecksums: true,
-		}
-
-		for i := len(outPktL) - 1; i >= 0; i-- {
-			layer := outPktL[i]
-			opts := gopacket.SerializeOptions{}
-			if tcpL, ok := layer.(*layers.TCP); ok {
-				if i == 0 {
-					log.Fatal(errors.New("TCP layer without IP Layer"))
-				}
-				if ipL, ok := outPktL[i-1].(*layers.IPv4); ok {
-					if err = tcpL.SetNetworkLayerForChecksum(ipL); err != nil {
-						log.Fatal(err)
+			for i := len(outPktL) - 1; i >= 0; i-- {
+				layer := outPktL[i]
+				opts := gopacket.SerializeOptions{}
+				if tcpL, ok := layer.(*layers.TCP); ok {
+					if i == 0 {
+						log.Fatal(errors.New("TCP layer without IP Layer"))
 					}
+					if ipL, ok := outPktL[i-1].(*layers.IPv4); ok {
+						if err = tcpL.SetNetworkLayerForChecksum(ipL); err != nil {
+							log.Fatal(err)
+						}
+					}
+					//TODO v6
+					opts = optsCSum
+				}
+				if _, ok := layer.(*layers.IPv4); ok {
+					opts = optsCSum
 				}
 				//TODO v6
-				opts = optsCSum
+				if err = layer.SerializeTo(buf, opts); err != nil {
+					log.Fatal(err)
+				}
 			}
-			if _, ok := layer.(*layers.IPv4); ok {
-				opts = optsCSum
-			}
-			//TODO v6
-			if err = layer.SerializeTo(buf, opts); err != nil {
+
+			if err = handle.WritePacketData(buf.Bytes()); err != nil {
 				log.Fatal(err)
 			}
-		}
-
-		if err = handle.WritePacketData(buf.Bytes()); err != nil {
-			log.Fatal(err)
 		}
 	}
 }
