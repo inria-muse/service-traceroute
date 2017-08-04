@@ -194,7 +194,7 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 }
 
 func (r *Receiver) Run() {
-	r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Millisecond))
+	r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Second))
 	for {
 		pkt := <-r.PktChan
 		r.Curr.Ts = pkt.Packet.Metadata().Timestamp.UnixNano()

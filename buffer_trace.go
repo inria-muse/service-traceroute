@@ -34,7 +34,7 @@ type HopLatency struct {
 func (bt *BufferTrace) NewBufferTrace(r *Receiver, sendQ chan []gopacket.SerializableLayer, outChan chan string, done chan bool) {
 	bt.MaxTtl = 32     //hardcoding for now
 	bt.Iter = 10       //hardcoding for now
-	bt.InterProbe = 10 //harcoding for now
+	bt.InterProbe = 20 //harcoding for now
 	bt.InterIter = 100 //hardcoding for now
 	bt.SendQ = sendQ
 	bt.R = r
@@ -185,7 +185,7 @@ func (bt *BufferTrace) PrintLatencies() {
 }
 
 func (bt *BufferTrace) Run() {
-	bt.OutChan <- fmt.Sprintf("%.3f: Starting buffertrace experiment", float64(time.Now().UnixNano())/float64(time.Millisecond))
+	bt.OutChan <- fmt.Sprintf("%.3f: Starting buffertrace experiment", float64(time.Now().UnixNano())/float64(time.Second))
 	go bt.AnalyzePackets()
 	go bt.SendPkts()
 	<-bt.DoneSend
