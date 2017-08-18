@@ -80,7 +80,6 @@ func (bt *BufferTrace) SendPkts() {
 	iT := time.NewTicker(time.Millisecond * time.Duration(bt.InterIter+bt.InterProbe*bt.MaxTtl))
 	i := 0
 	for _ = range iT.C {
-		bt.OutChan <- fmt.Sprintf("\t%d...", i)
 		pT := time.NewTicker(time.Millisecond * time.Duration(bt.InterProbe))
 		j := 1
 		for _ = range pT.C {
@@ -163,7 +162,6 @@ func (bt *BufferTrace) PrintLatencies() {
 					}
 					out += fmt.Sprintf("%.2f\t", float64(h[j].Rtt)/float64(time.Millisecond))
 				}
-
 			}
 			out += "\n"
 		} else {
