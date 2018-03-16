@@ -2,9 +2,7 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"net"
-	"time"
 
 	"github.com/google/gopacket/layers"
 )
@@ -21,6 +19,9 @@ type Receiver struct {
 	FlowInChan    chan CurrStatus
 	ProbeOutChan  chan CurrStatus
 	ProbeInChan   chan CurrStatus
+
+	StopChan chan bool
+	DoneChan chan bool
 }
 
 type CurrStatus struct {
@@ -64,6 +65,9 @@ func (r *Receiver) NewReceiver(pktChan chan InputPkt, hostV4 net.IP, hostV6 net.
 	r.FlowInChan = make(chan CurrStatus, 100000)
 	r.ProbeOutChan = make(chan CurrStatus, 100000)
 	r.ProbeInChan = make(chan CurrStatus, 100000)
+
+	r.StopChan = make(chan bool)
+	r.DoneChan = make(chan bool)
 }
 
 func (r *Receiver) GetHardwareAddresses(pkt InputPkt) {
@@ -98,6 +102,9 @@ func (r *Receiver) ParseTcpOut(pkt InputPkt, tcp *layers.TCP) {
 		return
 	}
 
+	r.Curr.Seq = tcp.Seq
+	r.Curr.Ack = tcp.Ack
+
 	if len(tcp.Payload) == 0 {
 		return
 	}
@@ -126,8 +133,9 @@ func (r *Receiver) ParseTcpLayer(pkt InputPkt) error {
 	}
 
 	tcp, _ := tcpLayer.(*layers.TCP)
-	r.Curr.Seq = tcp.Seq
-	r.Curr.Ack = tcp.Ack
+	//May cause problems when parsing probes
+	//r.Curr.Seq = tcp.Seq
+	//r.Curr.Ack = tcp.Ack
 	r.Curr.TcpHLen = uint32(tcp.DataOffset * 4)
 	if r.Curr.Dir == In {
 		r.ParseTcpIn(pkt, tcp)
@@ -194,19 +202,32 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 }
 
 func (r *Receiver) Run() {
-	r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Second))
+	//r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Second))
+
+	defer func() {
+		r.DoneChan <- true
+	}()
+
 	for {
-		pkt := <-r.PktChan
-		r.Curr.Ts = pkt.Packet.Metadata().Timestamp.UnixNano()
-		err := r.ParseIpLayer(pkt)
-		if err != nil {
-			continue
-		}
-		switch {
-		case r.Curr.Transport == layers.IPProtocolTCP:
-			r.ParseTcpLayer(pkt)
-		case r.Curr.Transport == layers.IPProtocolICMPv4 || r.Curr.Transport == layers.IPProtocolICMPv6:
-			r.ParseIcmpLayer(pkt)
+		select {
+		case pkt := <-r.PktChan:
+			r.Curr.Ts = pkt.Packet.Metadata().Timestamp.UnixNano()
+			err := r.ParseIpLayer(pkt)
+			if err != nil {
+				continue
+			}
+			switch {
+			case r.Curr.Transport == layers.IPProtocolTCP:
+				r.ParseTcpLayer(pkt)
+			case r.Curr.Transport == layers.IPProtocolICMPv4 || r.Curr.Transport == layers.IPProtocolICMPv6:
+				r.ParseIcmpLayer(pkt)
+			}
+		case <-r.StopChan:
+			return
 		}
 	}
+}
+
+func (r *Receiver) Stop() {
+	r.StopChan <- true
 }

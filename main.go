@@ -3,32 +3,70 @@ package main
 import (
 	"flag"
 	"fmt"
-	"math"
 	"net"
 	"os"
+	"time"
 )
 
 const (
 	Version = "0.1" // MAKE SURE TO INCREMENT AFTER EVERY CHANGE
 )
 
-const (
-	V4   = "4"
-	V6   = "6"
-	Tcp  = "tcp"
-	Icmp = "icmp"
-)
-
-type CapThread struct {
-	BPF     string
-	Buffer  int
-	CapSize int
+type Experiment struct {
+	ip                string
+	port              int
+	distance          int
+	iterations        int
+	sniffing          bool
+	sendPackets       bool
+	stopBorderRouters bool
+	waitProbeReply    bool
 }
 
-var capThreads = []CapThread{CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100},
-	CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}}
+var Experiments = []Experiment{
+	Experiment{
+		ip:                "128.93.101.87",
+		port:              80,
+		distance:          10,
+		iterations:        2,
+		sniffing:          true,
+		sendPackets:       true,
+		stopBorderRouters: true,
+		waitProbeReply:    true,
+	},
+	Experiment{
+		ip:                "193.51.224.142",
+		port:              443,
+		distance:          15,
+		iterations:        3,
+		sniffing:          true,
+		sendPackets:       true,
+		stopBorderRouters: true,
+		waitProbeReply:    true,
+	},
+	Experiment{
+		ip:                "198.38.120.152",
+		port:              443,
+		distance:          9,
+		iterations:        4,
+		sniffing:          true,
+		sendPackets:       true,
+		stopBorderRouters: true,
+		waitProbeReply:    true,
+	},
+	Experiment{
+		ip:                "198.38.120.154",
+		port:              443,
+		distance:          9,
+		iterations:        4,
+		sniffing:          true,
+		sendPackets:       true,
+		stopBorderRouters: true,
+		waitProbeReply:    true,
+	},
+}
 
-func checkFlags(version bool, iface string, proto string, ip string, port int) {
+func checkFlags(version bool, iface string) {
 	if version {
 		fmt.Printf("%s\n", Version)
 		os.Exit(0)
@@ -36,22 +74,6 @@ func checkFlags(version bool, iface string, proto string, ip string, port int) {
 
 	if iface == "" {
 		panic("Interface not valid")
-	}
-
-	if proto != V4 && proto != V6 {
-		panic("Bad IP Protocol")
-	}
-
-	if netIp := net.ParseIP(ip); netIp == nil {
-		panic("Bad IP address")
-	} else {
-		if proto == V4 && netIp.To4() == nil {
-			panic("Bad IP address")
-		}
-	}
-
-	if port < 0 || port > math.MaxUint16 {
-		panic("Bad port")
 	}
 }
 
@@ -71,45 +93,44 @@ func main() {
 	var iface string
 	flag.StringVar(&iface, "iface", "", "capture interface")
 
-	var proto string
-	flag.StringVar(&proto, "proto", V4, "IP version")
-
-	var ip string
-	flag.StringVar(&ip, "ip", "", "IP address to trace")
-
-	var port int
-	flag.IntVar(&port, "port", 0, "port to trace")
-
 	flag.Parse()
 
-	checkFlags(version, iface, proto, ip, port)
+	checkFlags(version, iface)
 
 	outChan := make(chan string, 1000)
-	done := make(chan bool)
-	pktChan := make(chan InputPkt, 100000)
 
 	go traceOut(outChan)
 
-	var localV4, localV6 net.IP
-	for _, thread := range capThreads {
-		ph := new(PcapHandler)
-		ph.NewPacketHandler(thread, iface, proto, ip, port, pktChan, outChan, done)
-		localV4 = ph.LocalV4
-		localV6 = ph.LocalV6
-		go ph.Run()
+	traceTCPManager := new(TraceTCPManager)
+	traceTCPManager.NewTraceTCPManager(iface, V4, nil)
+
+	traceTCPManager.SetOutChan(outChan)
+
+	traceTCPManager.AddBorderRouters(net.ParseIP("195.220.98.17"))
+
+	//Start TraceTCPManager listener
+	go traceTCPManager.Run()
+
+	//start 3 TraceTCP flow
+	for _, exp := range Experiments {
+		go traceTCPManager.StartNewConfiguredTraceTCP(
+			net.ParseIP(exp.ip),
+			exp.port,
+			exp.distance,
+			exp.iterations,
+			exp.sniffing,
+			exp.sendPackets,
+			exp.waitProbeReply,
+			exp.stopBorderRouters,
+		)
 	}
 
-	r := new(Receiver)
-	r.NewReceiver(pktChan, localV4, localV6, outChan)
-	go r.Run()
+	iT := time.NewTicker(time.Millisecond * 1000)
+	for _ = range iT.C {
+		if traceTCPManager.GetNumberOfRunningTraceTCP() <= 0 {
+			iT.Stop()
+		}
+	}
 
-	s := new(Sender)
-	s.NewSender(iface, r, outChan)
-	go s.Run()
-
-	bt := new(BufferTrace)
-	bt.NewBufferTrace(r, s.SendQ, outChan, done)
-	go bt.Run()
-
-	<-done
+	outChan <- "Finished"
 }
