@@ -79,7 +79,6 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 					} else if v.IP.IsGlobalUnicast() && v.IP.To16() != nil {
 						ph.LocalV6 = (*v).IP
 						if proto == V6 {
-							//fmt.Printf("Local V6 %s\n", v.IP.String())
 							validAddress = true
 						}
 					}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"math"
 	"net"
 	"time"
 
@@ -22,9 +23,11 @@ type BufferTrace struct {
 	E2eLatencies []int64
 	HopLatencies map[uint16][]HopLatency
 
-	BorderRouters   []net.IP
-	BorderCheckChan chan CurrStatus
-	Timeout         int
+	BorderRouters       []net.IP
+	BorderDistance      int
+	ReachedBorderRouter bool
+	BorderCheckChan     chan CurrStatus
+	Timeout             int
 
 	IDOffset       uint16
 	WaitProbeReply bool
@@ -50,6 +53,7 @@ func (bt *BufferTrace) NewBufferTrace(r *Receiver, maxTTL int, numberIterations 
 	bt.BorderRouters = borderRouters
 	bt.SendQ = sendQ
 	bt.R = r
+	bt.ReachedBorderRouter = false
 	bt.FlowSeqMap = make(map[uint32]int64)
 	bt.ProbeIdMap = make(map[uint16]int64)
 	bt.E2eLatencies = []int64{}
@@ -58,8 +62,6 @@ func (bt *BufferTrace) NewBufferTrace(r *Receiver, maxTTL int, numberIterations 
 	bt.OutChan = outChan
 	bt.DoneExp = make(chan bool)
 	bt.BorderCheckChan = make(chan CurrStatus, 1000)
-
-	//bt.OutChan <- fmt.Sprintf("Offset of %d and maxttl of %d", bt.IDOffset, bt.MaxTtl)
 }
 
 func (bt *BufferTrace) BuildPkt() (layers.Ethernet, layers.IPv4, layers.TCP) {
@@ -95,7 +97,8 @@ func (bt *BufferTrace) BuildPkt() (layers.Ethernet, layers.IPv4, layers.TCP) {
 func (bt *BufferTrace) SendPkts() {
 	<-bt.R.SendStartChan
 
-	//bt.OutChan <- fmt.Sprintf("Sending probe iterations...")
+	bt.BorderDistance = bt.MaxTtl
+
 	iT := time.NewTicker(time.Millisecond * time.Duration(bt.InterIter+bt.InterProbe*bt.MaxTtl))
 	i := 1
 	for _ = range iT.C {
@@ -113,7 +116,6 @@ func (bt *BufferTrace) SendPkts() {
 			tcpLayer.Seq = bt.R.Curr.Seq
 			tcpLayer.Ack = bt.R.Curr.Ack
 
-			//bt.OutChan <- fmt.Sprintf("Sending probe TTL %d with ID = %d\n\tSeq %d\n\tAck %d", ipLayer.TTL, ipLayer.Id, tcpLayer.Seq, tcpLayer.Ack)
 			bt.SendQ <- []gopacket.SerializableLayer{&ethernetLayer, &ipLayer, &tcpLayer}
 
 			if bt.WaitProbeReply {
@@ -146,10 +148,13 @@ func (bt *BufferTrace) SendPkts() {
 
 		if i > bt.MaxTtl || reachedBorder {
 			iT.Stop()
+			bt.BorderDistance = i - 1
+			if reachedBorder {
+				bt.ReachedBorderRouter = true
+			}
 			break
 		}
 	}
-	//bt.OutChan <- fmt.Sprintf("Done sending probes")
 	bt.DoneSend <- true
 }
 
@@ -164,7 +169,6 @@ func (bt *BufferTrace) AnalyzePackets() {
 				delete(bt.FlowSeqMap, c.Ack)
 			}
 		case c := <-bt.R.ProbeOutChan:
-			//bt.OutChan <- fmt.Sprintf("Sent reply with ID = %d at time %d", c.IpId, c.Ts)
 			c.IpId = bt.ConvertIDfromPktID(c.IpId)
 			id := c.IpId
 			idMap := id % uint16(bt.MaxTtl)
@@ -189,14 +193,10 @@ func (bt *BufferTrace) AnalyzePackets() {
 				continue
 			}
 
-			//bt.OutChan <- fmt.Sprintf("Received reply with ID = %d at time %d\n", id, c.Ts)
-
 			hIp := c.RemIp.String()
 			hl := HopLatency{Ip: hIp, Rtt: 0}
 			idMap := id % uint16(bt.MaxTtl)
 			iter := id / uint16(bt.MaxTtl)
-
-			//bt.OutChan <- fmt.Sprintf("Received reply with idMap = %d ( < %d) and iter = %d ( < %d )\n\tFrom %s\n", idMap, bt.MaxTtl, iter, bt.Iter, c.RemIp.String())
 
 			if oTs, ok := bt.ProbeIdMap[id]; ok {
 				hl.Rtt = c.Ts - oTs
@@ -217,32 +217,49 @@ func (bt *BufferTrace) AnalyzePackets() {
 
 func (bt *BufferTrace) PrintLatencies() TraceTCPReport {
 	report := TraceTCPReport{}
-	report.ips = make([]string, 0)
-	report.distance = make([]int, 0)
-	report.rtts = make([]float32, 0)
+	report.MaxTtl = bt.MaxTtl
+	report.BorderDistance = bt.BorderDistance
+	report.Iterations = bt.Iter
+	report.InterIterationTime = bt.InterIter
+	report.InterProbeTime = bt.InterProbe
+	report.ReachedBorderRouter = bt.ReachedBorderRouter
+	report.Hops = make([]string, bt.BorderDistance)
+	report.RttsAvg = make([]float64, bt.BorderDistance)
+	report.RttsVar = make([]float64, bt.BorderDistance)
 
-	for i := 0; i < bt.MaxTtl; i++ {
+	for i := 0; i < bt.BorderDistance; i++ {
 		if h, ok := bt.HopLatencies[uint16(i)]; ok {
+
+			counter := 0
+			var avg float64
+			var avg2 float64
+
 			for j := 0; j < bt.Iter; j++ {
-				if h[j].Rtt != 0 {
-					report.ips = append(report.ips, h[j].Ip)
-					report.distance = append(report.distance, (i + 1))
-					report.rtts = append(report.rtts, float32(h[j].Rtt)/float32(time.Millisecond))
+				if h[j].Rtt > 0 {
+					report.Hops[i] = h[j].Ip
+					counter++
+					avg += float64(h[j].Rtt) / float64(time.Millisecond)
+					avg2 += math.Pow(float64(h[j].Rtt)/float64(time.Millisecond), 2)
 				}
 			}
+			if counter > 0 {
+				avg /= float64(counter)
+				avg2 /= float64(counter)
+			}
+			report.RttsAvg[i] = avg
+			report.RttsVar[i] = avg2 - math.Pow(avg, 2)
 		}
 	}
 	return report
 }
 
 func (bt *BufferTrace) Run() TraceTCPReport {
-	//bt.OutChan <- fmt.Sprintf("%.3f: Starting buffertrace experiment", float64(time.Now().UnixNano())/float64(time.Second))
 	go bt.AnalyzePackets()
 	go bt.SendPkts()
 	<-bt.DoneSend
 	<-time.After(time.Second * 2)
 	report := bt.PrintLatencies()
-	bt.DoneExp <- true
+	//bt.DoneExp <- true
 	return report
 }
 
@@ -285,12 +302,10 @@ func (bt *BufferTrace) WaitTrainAndCheckForBorderRouter(ttl uint16, numberIterat
 			elapsed := float64(time.Now().UnixNano()-start.UnixNano()) / float64(time.Millisecond)
 			//If time elapsed
 			if elapsed >= float64(bt.Timeout) {
-				//bt.OutChan <- fmt.Sprintf("Time elapsed")
 				return border
 			}
 		}
 	}
-	//bt.OutChan <- fmt.Sprintf("%d - DONE", ttl)
 	return border
 }
 
@@ -317,7 +332,6 @@ func (bt *BufferTrace) WaitProbeAndCheckForBorderRouter(id uint16) bool {
 			elapsed := float64(time.Now().UnixNano()-start.UnixNano()) / float64(time.Millisecond)
 			//If time elapsed
 			if elapsed >= float64(bt.Timeout) {
-				//bt.OutChan <- fmt.Sprintf("Time elapsed")
 				return border
 			}
 		}

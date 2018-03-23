@@ -8,17 +8,18 @@ import (
 )
 
 type Receiver struct {
-	PktChan       chan InputPkt
-	LocalV4       net.IP
-	LocalV6       net.IP
-	SendStartChan chan bool
-	HasSentSend   bool
-	Curr          CurrStatus
-	OutChan       chan string
-	FlowOutChan   chan CurrStatus
-	FlowInChan    chan CurrStatus
-	ProbeOutChan  chan CurrStatus
-	ProbeInChan   chan CurrStatus
+	PktChan              chan InputPkt
+	LocalV4              net.IP
+	LocalV6              net.IP
+	SendStartChan        chan bool
+	HasSentSend          bool
+	StartWithEmptyPacket bool
+	Curr                 CurrStatus
+	OutChan              chan string
+	FlowOutChan          chan CurrStatus
+	FlowInChan           chan CurrStatus
+	ProbeOutChan         chan CurrStatus
+	ProbeInChan          chan CurrStatus
 
 	StopChan chan bool
 	DoneChan chan bool
@@ -52,11 +53,13 @@ const (
 	Out = 1
 )
 
-func (r *Receiver) NewReceiver(pktChan chan InputPkt, hostV4 net.IP, hostV6 net.IP, outChan chan string) {
+func (r *Receiver) NewReceiver(pktChan chan InputPkt, startWithEmptyPacket bool, hostV4 net.IP, hostV6 net.IP, outChan chan string) {
 	r.PktChan = pktChan
 	r.LocalV4 = hostV4
 	r.LocalV6 = hostV6
 	r.SendStartChan = make(chan bool, 2)
+
+	r.StartWithEmptyPacket = startWithEmptyPacket
 
 	r.Curr = CurrStatus{}
 	r.OutChan = outChan
@@ -105,7 +108,7 @@ func (r *Receiver) ParseTcpOut(pkt InputPkt, tcp *layers.TCP) {
 	r.Curr.Seq = tcp.Seq
 	r.Curr.Ack = tcp.Ack
 
-	if len(tcp.Payload) == 0 {
+	if !r.StartWithEmptyPacket && len(tcp.Payload) == 0 {
 		return
 	}
 
@@ -202,8 +205,6 @@ func (r *Receiver) ParseIpLayer(pkt InputPkt) error {
 }
 
 func (r *Receiver) Run() {
-	//r.OutChan <- fmt.Sprintf("%.3f: Starting receiver", float64(time.Now().UnixNano())/float64(time.Second))
-
 	defer func() {
 		r.DoneChan <- true
 	}()

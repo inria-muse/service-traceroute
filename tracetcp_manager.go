@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"tcpmodule/tracetcp"
 
@@ -105,14 +107,19 @@ func (tm *TraceTCPManager) Run() {
 		case <-tm.StopChan:
 			return
 		case tcpPacket := <-tm.TCPChan:
-			id, err := tm.GetIPIDFromTCPPacket(tcpPacket)
+			ip1, port1, ip2, port2, err := tm.GetFlowIDFromTCPPacket(tcpPacket)
 
 			if err != nil {
-				//ERROR
+				//ERROR: skip packet
 				continue
 			}
 
-			tracetcp := tm.GetTraceTCPExperimentFromID(id)
+			tracetcp := tm.GetTraceTCPExperimentFromFlowID(ip1, port1, ip2, port2)
+
+			if tracetcp == nil {
+				//ERROR: skip packet
+				continue
+			}
 
 			tracetcp.InsertTCPPacket(tcpPacket)
 
@@ -120,11 +127,16 @@ func (tm *TraceTCPManager) Run() {
 			id, err := tm.GetIPIDFromICMPPacket(icmpPacket)
 
 			if err != nil {
-				//ERROR
+				//ERROR: skip packet
 				continue
 			}
 
 			tracetcp := tm.GetTraceTCPExperimentFromID(id)
+
+			if tracetcp == nil {
+				//ERROR: skip packet
+				continue
+			}
 
 			tracetcp.InsertICMPChannel(icmpPacket)
 		}
@@ -138,7 +150,7 @@ func (tm *TraceTCPManager) Stop() {
 //Open a new TraceTCP experiment
 //Must be run on a thread, otherwise it locks the thread until the end
 //If there is no space (i.e. no available offset spot), return error
-func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePort int, maxDistance int, numberIterations int, sniffing bool, canSendPkts bool, waitProbeReply bool, stopWithBorderRouters bool) error {
+func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePort int, maxDistance int, numberIterations int, sniffing bool, canSendPkts bool, waitProbeReply bool, stopWithBorderRouters bool, startWithEmptyPacket bool) error {
 	//Check that there is enough space
 	size := maxDistance * numberIterations
 	interval, err := tm.UseInterval(size)
@@ -157,40 +169,34 @@ func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePor
 
 	//Generate wanted configuration
 	config := TraceTCPConfiguration{
-		IDOffset:           uint16(interval.start),
-		BorderIPs:          borderIPs,
-		Distance:           maxDistance,
-		Interface:          tm.Configuration.Interface,
-		RemoteIP:           remoteIP,
-		RemotePort:         remotePort,
-		Sniffing:           sniffing,
-		CanSendPackets:     canSendPkts,
-		InterIterationTime: tm.Configuration.InterIterationTime,
-		InterProbeTime:     tm.Configuration.InterProbeTime,
-		IPVersion:          tracetcp.V4,
-		Iterations:         numberIterations,
-		LocalIPv4:          tm.LocalIPv4,
-		LocalIPv6:          tm.LocalIPv6,
-		Timeout:            tm.Configuration.Timeout,
-		WaitProbe:          waitProbeReply,
+		IDOffset:             uint16(interval.start),
+		BorderIPs:            borderIPs,
+		Distance:             maxDistance,
+		Interface:            tm.Configuration.Interface,
+		RemoteIP:             remoteIP,
+		RemotePort:           remotePort,
+		Sniffing:             sniffing,
+		CanSendPackets:       canSendPkts,
+		InterIterationTime:   tm.Configuration.InterIterationTime,
+		InterProbeTime:       tm.Configuration.InterProbeTime,
+		IPVersion:            tracetcp.V4,
+		Iterations:           numberIterations,
+		LocalIPv4:            tm.LocalIPv4,
+		LocalIPv6:            tm.LocalIPv6,
+		Timeout:              tm.Configuration.Timeout,
+		WaitProbe:            waitProbeReply,
+		StartWithEmptyPacket: startWithEmptyPacket,
 	}
 
 	//Start  TraceTCP on a new thread
 	tracetcp := new(TraceTCP)
 	tracetcp.NewConfiguredTraceTCP(config)
 
+	//Set output channel
+	tracetcp.SetOutPacketsChan(tm.OutPacketChan)
+
 	//Set 'stdout'
 	tracetcp.SetStdOutChan(tm.OutChan)
-
-	//Check if configuration for outgoing packets is correct
-	if !canSendPkts && tm.OutPacketChan != nil {
-		return errors.New("Undefined OutPacketChan. Cannot start TraceTCP with this settings")
-	}
-
-	//If requested, set redirect queue for outgoing pkts
-	if !canSendPkts {
-		tracetcp.SetOutPacketsChan(tm.OutPacketChan)
-	}
 
 	//Store tracetcp as running experiment
 	tm.AddTraceTCPExperiment(tracetcp)
@@ -286,7 +292,6 @@ func (tm *TraceTCPManager) RemoveTraceTCPExperiment(tracetcp *TraceTCP) {
 			break
 		}
 	}
-	tm.OutChan <- fmt.Sprintf("Index to remove: %d", i)
 	//Remove the experiment from the array
 	tm.RunningTraceTCPs = append(tm.RunningTraceTCPs[:i], tm.RunningTraceTCPs[i+1:]...)
 
@@ -312,6 +317,28 @@ func (tm *TraceTCPManager) GetTraceTCPExperimentFromID(id uint16) *TraceTCP {
 	return tracetcp
 }
 
+//GetTraceTCPExperimentFromFlowID return the TraceTCP where remoteIP and remotePort matches one of 2 pairs given as input (where one is local end host and the other is the remote one)
+func (tm *TraceTCPManager) GetTraceTCPExperimentFromFlowID(ip1 net.IP, port1 int, ip2 net.IP, port2 int) *TraceTCP {
+	tm.runningTracesMutex.Lock()
+
+	var tracetcp *TraceTCP
+
+	for _, runningTraceTCP := range tm.RunningTraceTCPs {
+		//Check if flows IDs corresponds (checking both directions)
+		if runningTraceTCP.Configuration.RemoteIP.String() == ip1.String() && runningTraceTCP.Configuration.RemotePort == port1 {
+			tracetcp = runningTraceTCP
+			break
+		} else if runningTraceTCP.Configuration.RemoteIP.String() == ip2.String() && runningTraceTCP.Configuration.RemotePort == port2 {
+			tracetcp = runningTraceTCP
+			break
+		}
+	}
+
+	tm.runningTracesMutex.Unlock()
+
+	return tracetcp
+}
+
 func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
 	tm.runningTracesMutex.Lock()
 
@@ -326,12 +353,31 @@ func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
 
 //###### PACKET PARSING  #######
 
-func (tm *TraceTCPManager) GetIPIDFromTCPPacket(tcpPacket gopacket.Packet) (uint16, error) {
+func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket gopacket.Packet) (net.IP, int, net.IP, int, error) {
+	var ip1 net.IP
+	var ip2 net.IP
+	var port1 int
+	var port2 int
+	var err error
+
 	if ip4Layer := tcpPacket.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
-		id := ip4Layer.(*layers.IPv4).Id
-		return id, nil
+		ip1 = ip4Layer.(*layers.IPv4).SrcIP
+		ip2 = ip4Layer.(*layers.IPv4).DstIP
+	} else if ip6Layer := tcpPacket.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
+		ip1 = ip6Layer.(*layers.IPv4).SrcIP
+		ip2 = ip6Layer.(*layers.IPv4).DstIP
+	} else {
+		err = errors.New("No IPv4 Packet")
 	}
-	return 0, errors.New("No IPv4 Packet")
+
+	if tcpLayer := tcpPacket.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+		port1 = tm.ConvertPort(tcpLayer.(*layers.TCP).SrcPort.String())
+		port2 = tm.ConvertPort(tcpLayer.(*layers.TCP).DstPort.String())
+	} else {
+		err = errors.New("No TCP Packet")
+	}
+
+	return ip1, port1, ip2, port2, err
 }
 
 func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket gopacket.Packet) (uint16, error) {
@@ -442,4 +488,21 @@ func (tm *TraceTCPManager) SetOutPktsChan(outPktsChan chan []gopacket.Serializab
 
 func (tm *TraceTCPManager) GetOutPktsChan() chan []gopacket.SerializableLayer {
 	return tm.OutPacketChan
+}
+
+func (tm *TraceTCPManager) SetICMPInChan(icmpChan chan gopacket.Packet) {
+	tm.ICMPChan = icmpChan
+}
+
+func (tm *TraceTCPManager) SetTCPInChan(tcpChan chan gopacket.Packet) {
+	tm.TCPChan = tcpChan
+}
+
+func (tm *TraceTCPManager) ConvertPort(port string) int {
+	if !strings.Contains(port, "(") {
+		p, _ := strconv.Atoi(port)
+		return p
+	}
+	p, _ := strconv.Atoi(port[:strings.Index(port, "(")])
+	return p
 }

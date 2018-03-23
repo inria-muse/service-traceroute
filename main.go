@@ -1,11 +1,17 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
 )
 
 const (
@@ -13,56 +19,83 @@ const (
 )
 
 type Experiment struct {
-	ip                string
-	port              int
-	distance          int
-	iterations        int
-	sniffing          bool
-	sendPackets       bool
-	stopBorderRouters bool
-	waitProbeReply    bool
+	ip                   string
+	port                 int
+	distance             int
+	iterations           int
+	sniffing             bool
+	sendPackets          bool
+	stopBorderRouters    bool
+	waitProbeReply       bool
+	startWithEmptyPacket bool
 }
 
 var Experiments = []Experiment{
 	Experiment{
-		ip:                "128.93.101.87",
-		port:              80,
-		distance:          10,
-		iterations:        2,
-		sniffing:          true,
-		sendPackets:       true,
-		stopBorderRouters: true,
-		waitProbeReply:    true,
+		ip:                   "128.93.101.87",
+		port:                 80,
+		distance:             10,
+		iterations:           2,
+		sniffing:             false,
+		sendPackets:          false,
+		stopBorderRouters:    true,
+		waitProbeReply:       false,
+		startWithEmptyPacket: false,
 	},
 	Experiment{
-		ip:                "193.51.224.142",
-		port:              443,
-		distance:          15,
-		iterations:        3,
-		sniffing:          true,
-		sendPackets:       true,
-		stopBorderRouters: true,
-		waitProbeReply:    true,
+		ip:                   "193.51.224.143",
+		port:                 443,
+		distance:             15,
+		iterations:           3,
+		sniffing:             false,
+		sendPackets:          false,
+		stopBorderRouters:    true,
+		waitProbeReply:       false,
+		startWithEmptyPacket: false,
 	},
 	Experiment{
-		ip:                "198.38.120.152",
-		port:              443,
-		distance:          9,
-		iterations:        4,
-		sniffing:          true,
-		sendPackets:       true,
-		stopBorderRouters: true,
-		waitProbeReply:    true,
+		ip:                   "198.38.120.152",
+		port:                 443,
+		distance:             9,
+		iterations:           4,
+		sniffing:             false,
+		sendPackets:          false,
+		stopBorderRouters:    true,
+		waitProbeReply:       false,
+		startWithEmptyPacket: true,
 	},
 	Experiment{
-		ip:                "198.38.120.154",
-		port:              443,
-		distance:          9,
-		iterations:        4,
-		sniffing:          true,
-		sendPackets:       true,
-		stopBorderRouters: true,
-		waitProbeReply:    true,
+		ip:                   "198.38.120.154",
+		port:                 443,
+		distance:             9,
+		iterations:           4,
+		sniffing:             false,
+		sendPackets:          false,
+		stopBorderRouters:    true,
+		waitProbeReply:       false,
+		startWithEmptyPacket: true,
+	},
+	Experiment{
+		ip:                   "198.38.120.149",
+		port:                 443,
+		distance:             9,
+		iterations:           4,
+		sniffing:             false,
+		sendPackets:          false,
+		stopBorderRouters:    true,
+		waitProbeReply:       false,
+		startWithEmptyPacket: true,
+	},
+	Experiment{
+		ip:                   "198.38.120.162",
+		port:                 443,
+		distance:             9,
+		iterations:           4,
+		sniffing:             false,
+		sendPackets:          false,
+		stopBorderRouters:    true,
+		waitProbeReply:       false,
+		startWithEmptyPacket: true,
 	},
 }
 
@@ -101,12 +134,27 @@ func main() {
 
 	go traceOut(outChan)
 
+	//Start Listeners and Sender
+	queue := make(chan []gopacket.SerializableLayer, 1000)
+	go startSender(iface, queue)
+
+	tcpChanInputPkt, icmpChanInputPkt := startListener(iface, V4, outChan)
+
+	tcpChan := make(chan gopacket.Packet, 1000)
+	icmpChan := make(chan gopacket.Packet, 1000)
+
+	go converter(tcpChanInputPkt, tcpChan, icmpChanInputPkt, icmpChan)
+
 	traceTCPManager := new(TraceTCPManager)
 	traceTCPManager.NewTraceTCPManager(iface, V4, nil)
 
 	traceTCPManager.SetOutChan(outChan)
 
 	traceTCPManager.AddBorderRouters(net.ParseIP("195.220.98.17"))
+
+	traceTCPManager.SetOutPktsChan(queue)
+	traceTCPManager.SetTCPInChan(tcpChan)
+	traceTCPManager.SetICMPInChan(icmpChan)
 
 	//Start TraceTCPManager listener
 	go traceTCPManager.Run()
@@ -122,6 +170,7 @@ func main() {
 			exp.sendPackets,
 			exp.waitProbeReply,
 			exp.stopBorderRouters,
+			exp.startWithEmptyPacket,
 		)
 	}
 
@@ -133,4 +182,85 @@ func main() {
 	}
 
 	outChan <- "Finished"
+}
+
+func startListener(iface string, ipVersion string, outchan chan string) (chan InputPkt, chan InputPkt) {
+	var TCPCapThread = CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100}
+	var ICMPCapThread = CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}
+
+	tcpChan := make(chan InputPkt, 1000)
+	icmpChan := make(chan InputPkt, 1000)
+	readyChan := make(chan bool)
+
+	tcpHandler := new(PcapHandler)
+	tcpHandler.NewPacketHandler(TCPCapThread, iface, ipVersion, "", 0, tcpChan, outchan, readyChan)
+	go tcpHandler.Run()
+	<-readyChan
+
+	icmpHandler := new(PcapHandler)
+	icmpHandler.NewPacketHandler(ICMPCapThread, iface, ipVersion, "", 0, icmpChan, outchan, readyChan)
+	go icmpHandler.Run()
+	<-readyChan
+
+	return tcpChan, icmpChan
+}
+
+func startSender(iface string, sendQueue chan []gopacket.SerializableLayer) {
+	handle, err := pcap.OpenLive(iface, int32(100), false, time.Duration(30*time.Second))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer handle.Close()
+
+	buf := gopacket.NewSerializeBuffer()
+
+	for {
+		select {
+		case outPktL := <-sendQueue:
+
+			buf.Clear()
+			optsCSum := gopacket.SerializeOptions{
+				ComputeChecksums: true,
+			}
+
+			for i := len(outPktL) - 1; i >= 0; i-- {
+				layer := outPktL[i]
+				opts := gopacket.SerializeOptions{}
+				if tcpL, ok := layer.(*layers.TCP); ok {
+					if i == 0 {
+						log.Fatal(errors.New("TCP layer without IP Layer"))
+					}
+					if ipL, ok := outPktL[i-1].(*layers.IPv4); ok {
+						if err = tcpL.SetNetworkLayerForChecksum(ipL); err != nil {
+							log.Fatal(err)
+						}
+					}
+					//TODO v6
+					opts = optsCSum
+				}
+				if _, ok := layer.(*layers.IPv4); ok {
+					opts = optsCSum
+				}
+				//TODO v6
+				if err = layer.SerializeTo(buf, opts); err != nil {
+					log.Fatal(err)
+				}
+			}
+
+			if err = handle.WritePacketData(buf.Bytes()); err != nil {
+				log.Fatal(err)
+			}
+		}
+	}
+}
+
+func converter(tcpChan chan InputPkt, tcpChanConverted chan gopacket.Packet, icmpChan chan InputPkt, icmpChanConverted chan gopacket.Packet) {
+	for {
+		select {
+		case packet := <-tcpChan:
+			tcpChanConverted <- packet.Packet
+		case packet := <-icmpChan:
+			icmpChanConverted <- packet.Packet
+		}
+	}
 }

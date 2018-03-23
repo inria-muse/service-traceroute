@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"time"
 
@@ -35,6 +36,11 @@ type CapThread struct {
 var TCPCapThread = CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100}
 var ICMPCapThread = CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}
 
+type TraceTCPJson struct {
+	Info TraceTCPInfo
+	Data TraceTCPReport
+}
+
 type TraceTCPInfo struct {
 	Version string
 	Conf    string
@@ -42,34 +48,48 @@ type TraceTCPInfo struct {
 }
 
 type TraceTCPReport struct {
-	targetIP   string
-	targetPort int
-	service    string
-	ips        []string
-	distance   []int
-	rtts       []float32
-	tsStart    int64
-	tsEnd      int64
+	TargetIP   string
+	TargetPort int
+	Service    string
+	Hops       []string  //IP for each hop
+	RttsAvg    []float64 //RTT AVG for each hop
+	RttsVar    []float64 //RTT VAR for each hop (if >1 iterations)
+
+	MaxTtl         int
+	BorderDistance int
+	Iterations     int
+
+	InterProbeTime     int
+	InterIterationTime int
+
+	ReachedBorderRouter bool
+
+	TsStart int64
+	TsEnd   int64
 }
 
 //Configuration to run TraceTCP
 type TraceTCPConfiguration struct {
-	LocalIPv4          net.IP   //IPv4 of the local machine
-	LocalIPv6          net.IP   //IPv6 of the local machine
-	RemoteIP           net.IP   //IP of the remote target end host
-	RemotePort         int      //Port of the remote target end host
-	Interface          string   //Interface used to transmit packets
-	Distance           int      //Max TTL to reach (from 1 to Distance included ?)
-	BorderIPs          []net.IP //Set of IPs that, if encountered, will stop TraceTCP
-	Iterations         int      //Number of probes for each TTL
-	InterProbeTime     int      //Time to wait between each probe
-	InterIterationTime int      //Time to wait between each iteration
-	IPVersion          string   //IP Version
-	Sniffing           bool     //Specify if TraceTCP has to sniff on the interface or receive packets through the APIs
-	CanSendPackets     bool     //Specify if TraceTCP will send packets autonomously or delegate it to someone else
-	Timeout            int      //Timeout (milliseconds)
-	IDOffset           uint16   //Offset for the IP ID field in order to allow parallelisation without interference with running TraceTCPs
-	WaitProbe          bool     //Flag to specify if it is required to wait the reply for each transmitted probe (send - wait - analyse). If false, then TraceTCP will wait for the train
+	ConfHash             string
+	Service              string   //Type of service of the remote IP
+	LocalIPv4            net.IP   //IPv4 of the local machine
+	LocalIPv6            net.IP   //IPv6 of the local machine
+	RemoteIP             net.IP   //IP of the remote target end host
+	RemotePort           int      //Port of the remote target end host
+	LocalPort            int      //Port of the local end host
+	Interface            string   //Interface used to transmit packets
+	Distance             int      //Max TTL to reach (from 1 to Distance included ?)
+	BorderIPs            []net.IP //Set of IPs that, if encountered, will stop TraceTCP
+	Iterations           int      //Number of probes for each TTL
+	InterProbeTime       int      //Time to wait between each probe
+	InterIterationTime   int      //Time to wait between each iteration
+	IPVersion            string   //IP Version
+	Sniffing             bool     //Specify if TraceTCP has to sniff on the interface or receive packets through the APIs
+	CanSendPackets       bool     //Specify if TraceTCP will send packets autonomously or delegate it to someone else
+	Timeout              int      //Timeout (milliseconds)
+	IDOffset             uint16   //Offset for the IP ID field in order to allow parallelisation without interference with running TraceTCPs
+	WaitProbe            bool     //Flag to specify if it is required to wait the reply for each transmitted probe (send - wait - analyse). If false, then TraceTCP will wait for the train
+	StartWithEmptyPacket bool     //Flag to specify whether TraceTCP has to start when an empty ack is received. TraceTCP always starts with ACK with payload
 }
 
 //Struct to contains required objects to run TraceTCP
@@ -158,7 +178,7 @@ func (tt *TraceTCP) Run() {
 
 	//Start receiver asynchronously
 	tt.Receiver = new(Receiver)
-	tt.Receiver.NewReceiver(pktChan, tt.Configuration.LocalIPv4, tt.Configuration.LocalIPv6, outChan)
+	tt.Receiver.NewReceiver(pktChan, tt.Configuration.StartWithEmptyPacket, tt.Configuration.LocalIPv4, tt.Configuration.LocalIPv6, outChan)
 	go tt.Receiver.Run()
 
 	var outPktChan chan []gopacket.SerializableLayer
@@ -195,9 +215,6 @@ func (tt *TraceTCP) Run() {
 
 	report := tt.Traceroute.Run()
 
-	//Wait the end
-	<-tt.Traceroute.DoneExp
-
 	//Close everything and wait to synch with the thread
 	tt.SniffTCPHandler.Stop()
 	<-tt.SniffTCPHandler.DoneChan
@@ -208,18 +225,34 @@ func (tt *TraceTCP) Run() {
 	tt.Receiver.Stop()
 	<-tt.Receiver.DoneChan
 
-	tt.Sender.Stop()
-	<-tt.Sender.DoneChan
+	if tt.Sender != nil {
+		tt.Sender.Stop()
+		<-tt.Sender.DoneChan
+	}
 
 	end := time.Now().UnixNano() / int64(time.Millisecond)
 
 	//send report
-	report.service = "TraceTCP"
-	report.targetIP = tt.Configuration.RemoteIP.String()
-	report.targetPort = tt.Configuration.RemotePort
-	report.tsStart = start
-	report.tsEnd = end
+	report.Service = "TraceTCP"
+	report.TargetIP = tt.Configuration.RemoteIP.String()
+	report.TargetPort = tt.Configuration.RemotePort
+	report.TsStart = start
+	report.TsEnd = end
 
+	reportInfo := TraceTCPInfo{
+		Version: Version,
+		Type:    "TraceTCP",
+		Conf:    tt.Configuration.ConfHash,
+	}
+
+	completeReport := TraceTCPJson{
+		Info: reportInfo,
+		Data: report,
+	}
+
+	out, _ := json.Marshal(completeReport)
+
+	tt.OutChan <- string(out) + "\n"
 }
 
 func (tt *TraceTCP) InsertTCPPacket(pkt gopacket.Packet) {
@@ -244,6 +277,10 @@ func (tt *TraceTCP) SetRemoteIP(remoteIP net.IP) {
 
 func (tt *TraceTCP) SetRemotePort(remotePort int) {
 	tt.Configuration.RemotePort = remotePort
+}
+
+func (tt *TraceTCP) SetLocalPort(localPort int) {
+	tt.Configuration.LocalPort = localPort
 }
 
 func (tt *TraceTCP) SetInterface(iface string) {
@@ -320,4 +357,12 @@ func (tt *TraceTCP) SetWaitProbeFlag(waitProbe bool) {
 
 func (tt *TraceTCP) GetWaitProbeFlag() bool {
 	return tt.Configuration.WaitProbe
+}
+
+func (tt *TraceTCP) SetService(service string) {
+	tt.Configuration.Service = service
+}
+
+func (tt *TraceTCP) SetStartWithEmptyPacket(start bool) {
+	tt.Configuration.StartWithEmptyPacket = start
 }
