@@ -13,6 +13,7 @@ const (
 	V6   = "6"
 	Tcp  = "tcp"
 	Icmp = "icmp"
+	Udp  = "udp"
 )
 
 const (
@@ -147,7 +148,7 @@ func (tt *TraceTCP) NewConfiguredTraceTCP(configuration TraceTCPConfiguration) {
 	tt.SniffICMPChannel = make(chan gopacket.Packet, 1000)
 }
 
-func (tt *TraceTCP) Run() {
+func (tt *TraceTCP) Run() TraceTCPJson {
 	//Init channels
 	outChan := tt.OutChan
 	ready := make(chan bool)
@@ -233,7 +234,7 @@ func (tt *TraceTCP) Run() {
 	end := time.Now().UnixNano() / int64(time.Millisecond)
 
 	//send report
-	report.Service = "TraceTCP"
+	report.Service = tt.Configuration.Service
 	report.TargetIP = tt.Configuration.RemoteIP.String()
 	report.TargetPort = tt.Configuration.RemotePort
 	report.TsStart = start
@@ -253,6 +254,8 @@ func (tt *TraceTCP) Run() {
 	out, _ := json.Marshal(completeReport)
 
 	tt.OutChan <- string(out) + "\n"
+
+	return completeReport
 }
 
 func (tt *TraceTCP) InsertTCPPacket(pkt gopacket.Packet) {

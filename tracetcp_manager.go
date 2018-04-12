@@ -10,11 +10,14 @@ import (
 	"strings"
 	"sync"
 	"tcpmodule/tracetcp"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 )
+
+const LogTTL int64 = 300 //seconds?
 
 //Interval for Offsets
 //[start, end)
@@ -32,6 +35,15 @@ type TraceTCPManagerConfiguration struct {
 	InterProbeTime     int
 
 	Timeout int
+}
+
+type TraceTCPLog struct {
+	Report        TraceTCPJson
+	Configuration TraceTCPConfiguration
+
+	IsRunning  bool
+	StartedAt  int64
+	FinishedAt int64
 }
 
 type TraceTCPManager struct {
@@ -59,6 +71,11 @@ type TraceTCPManager struct {
 	//Mutex
 	offsetMutex        *sync.Mutex
 	runningTracesMutex *sync.Mutex
+	logsMapMutex       *sync.Mutex
+
+	//Results
+	LogsMap    map[string]TraceTCPLog
+	LogsMapTTL int64 //time to live for data in logs map when the experiment is finished
 }
 
 //NewTraceTCPManager initialize the manager of multiple TraceTCP experiments
@@ -77,9 +94,12 @@ func (tm *TraceTCPManager) NewTraceTCPManager(iface string, ipVersion string, bo
 	//Init
 	tm.offsetMutex = &sync.Mutex{}
 	tm.runningTracesMutex = &sync.Mutex{}
+	tm.logsMapMutex = &sync.Mutex{}
 
 	tm.RunningTraceTCPs = make([]*TraceTCP, 0)
 	tm.AvailableOffsets = make([]OffsetInterval, 1)
+	tm.LogsMap = make(map[string]TraceTCPLog)
+	tm.LogsMapTTL = LogTTL
 
 	//Add interval long all possible IDs
 	tm.AvailableOffsets[0] = OffsetInterval{
@@ -126,6 +146,8 @@ func (tm *TraceTCPManager) Run() {
 		case icmpPacket := <-tm.ICMPChan:
 			id, err := tm.GetIPIDFromICMPPacket(icmpPacket)
 
+			dstIp, _ := tm.GetDstIPFromICMPPacket(icmpPacket)
+
 			if err != nil {
 				//ERROR: skip packet
 				continue
@@ -133,7 +155,7 @@ func (tm *TraceTCPManager) Run() {
 
 			tracetcp := tm.GetTraceTCPExperimentFromID(id)
 
-			if tracetcp == nil {
+			if tracetcp == nil || tracetcp.Configuration.RemoteIP.String() != dstIp.String() {
 				//ERROR: skip packet
 				continue
 			}
@@ -150,7 +172,12 @@ func (tm *TraceTCPManager) Stop() {
 //Open a new TraceTCP experiment
 //Must be run on a thread, otherwise it locks the thread until the end
 //If there is no space (i.e. no available offset spot), return error
-func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePort int, maxDistance int, numberIterations int, sniffing bool, canSendPkts bool, waitProbeReply bool, stopWithBorderRouters bool, startWithEmptyPacket bool) error {
+func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePort int, service string, maxDistance int, numberIterations int, sniffing bool, canSendPkts bool, waitProbeReply bool, stopWithBorderRouters bool, startWithEmptyPacket bool) error {
+	//check that there aren't any other TraceTCP to the same remote IP
+	if tm.CheckExistanceTraceTCPExperiment(remoteIP) {
+		return errors.New("TraceTCP to " + remoteIP.String() + " is already running")
+	}
+
 	//Check that there is enough space
 	size := maxDistance * numberIterations
 	interval, err := tm.UseInterval(size)
@@ -171,6 +198,7 @@ func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePor
 	config := TraceTCPConfiguration{
 		IDOffset:             uint16(interval.start),
 		BorderIPs:            borderIPs,
+		Service:              service,
 		Distance:             maxDistance,
 		Interface:            tm.Configuration.Interface,
 		RemoteIP:             remoteIP,
@@ -188,6 +216,13 @@ func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePor
 		StartWithEmptyPacket: startWithEmptyPacket,
 	}
 
+	log := TraceTCPLog{
+		Configuration: config,
+		IsRunning:     true,
+		FinishedAt:    -1,
+		StartedAt:     time.Now().UnixNano(),
+	}
+
 	//Start  TraceTCP on a new thread
 	tracetcp := new(TraceTCP)
 	tracetcp.NewConfiguredTraceTCP(config)
@@ -198,11 +233,25 @@ func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePor
 	//Set 'stdout'
 	tracetcp.SetStdOutChan(tm.OutChan)
 
-	//Store tracetcp as running experiment
-	tm.AddTraceTCPExperiment(tracetcp)
+	//Check if there are no tracetcp to the same destination
+	//If no tracetcp, then store tracetcp as running experiment
+	exists := tm.CheckAndAddTraceTCPExperiment(tracetcp)
+
+	if exists {
+		//Free the used interval
+		tm.FreeInterval(interval)
+		return errors.New("TraceTCP to " + remoteIP.String() + " is already running")
+	}
+
+	tm.UpdateLogsMap(log)
 
 	//Run TraceTCP
-	tracetcp.Run()
+	report := tracetcp.Run()
+
+	log.Report = report
+	log.FinishedAt = time.Now().UnixNano()
+
+	tm.UpdateLogsMap(log)
 
 	//Finished, remove tracetcp from running experiments
 	tm.RemoveTraceTCPExperiment(tracetcp)
@@ -270,10 +319,43 @@ func (tm *TraceTCPManager) FreeInterval(offsetInterval OffsetInterval) {
 	tm.offsetMutex.Unlock()
 }
 
-func (tm *TraceTCPManager) AddTraceTCPExperiment(tracetcp *TraceTCP) {
+func (tm *TraceTCPManager) CheckExistanceTraceTCPExperiment(remoteIp net.IP) bool {
+	exists := false
+
 	tm.runningTracesMutex.Lock()
-	tm.RunningTraceTCPs = append(tm.RunningTraceTCPs, tracetcp)
+
+	for _, runningTraceTCP := range tm.RunningTraceTCPs {
+		//Check if flows IDs corresponds (checking both directions)
+		if runningTraceTCP.Configuration.RemoteIP.String() == remoteIp.String() {
+			exists = true
+			break
+		}
+	}
+
 	tm.runningTracesMutex.Unlock()
+
+	return exists
+}
+
+func (tm *TraceTCPManager) CheckAndAddTraceTCPExperiment(tracetcp *TraceTCP) bool {
+	exists := false
+
+	tm.runningTracesMutex.Lock()
+
+	for _, runningTraceTCP := range tm.RunningTraceTCPs {
+		//Check if flows IDs corresponds (checking both directions)
+		if runningTraceTCP.Configuration.RemoteIP.String() == tracetcp.Configuration.RemoteIP.String() {
+			exists = true
+			break
+		}
+	}
+
+	if !exists {
+		tm.RunningTraceTCPs = append(tm.RunningTraceTCPs, tracetcp)
+	}
+
+	tm.runningTracesMutex.Unlock()
+	return exists
 }
 
 func (tm *TraceTCPManager) RemoveTraceTCPExperiment(tracetcp *TraceTCP) {
@@ -349,6 +431,67 @@ func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
 	return numberRunningExps
 }
 
+func (tm *TraceTCPManager) GetLog(remoteIp string) (TraceTCPLog, error) {
+	var log TraceTCPLog = TraceTCPLog{}
+	var err error = nil
+
+	tm.ClearLogsMap()
+
+	tm.logsMapMutex.Lock()
+
+	if _, ok := tm.LogsMap[remoteIp]; ok {
+		log = tm.LogsMap[remoteIp]
+	} else {
+		err = errors.New("Log not found")
+	}
+
+	tm.logsMapMutex.Unlock()
+
+	return log, err
+}
+
+func (tm *TraceTCPManager) UpdateLogsMap(log TraceTCPLog) error {
+	tm.ClearLogsMap()
+
+	var err error = nil
+	tm.logsMapMutex.Lock()
+
+	tm.LogsMap[log.Configuration.RemoteIP.String()] = log
+
+	tm.logsMapMutex.Unlock()
+	return err
+}
+
+func (tm *TraceTCPManager) RemoveLogsMap(log TraceTCPLog) error {
+	var err error = nil
+
+	if _, ok := tm.LogsMap[log.Configuration.RemoteIP.String()]; ok {
+		delete(tm.LogsMap, log.Configuration.RemoteIP.String())
+	} else {
+		err = errors.New("Log not found")
+	}
+
+	return err
+}
+
+func (tm *TraceTCPManager) ClearLogsMap() {
+	tm.logsMapMutex.Lock()
+
+	for _, v := range tm.LogsMap {
+		now := time.Now().UnixNano()
+
+		if v.FinishedAt <= 0 || v.IsRunning {
+			continue
+		}
+
+		if ((now - v.FinishedAt) / int64(time.Second)) > tm.LogsMapTTL {
+			tm.RemoveLogsMap(v)
+		}
+	}
+
+	tm.logsMapMutex.Unlock()
+}
+
 //###### END MUTEX  #######
 
 //###### PACKET PARSING  #######
@@ -383,14 +526,35 @@ func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket gopacket.Packet) (ne
 func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket gopacket.Packet) (uint16, error) {
 	if icmp4Layer := icmpPacket.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
-		payload := make([]byte, len(icmp.LayerPayload()))
-		copy(payload, icmp.LayerPayload())
 
-		var id uint16 = binary.BigEndian.Uint16(payload[4:6])
+		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
+			payload := make([]byte, len(icmp.LayerPayload()))
+			copy(payload, icmp.LayerPayload())
 
-		return id, nil
+			var id uint16 = binary.BigEndian.Uint16(payload[4:6])
+
+			return id, nil
+		}
 	}
 	return 0, errors.New("Not an ICMPv4 Packet")
+}
+
+func (tm *TraceTCPManager) GetDstIPFromICMPPacket(icmpPacket gopacket.Packet) (net.IP, error) {
+	if icmp4Layer := icmpPacket.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
+		icmp, _ := icmp4Layer.(*layers.ICMPv4)
+
+		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
+			payload := make([]byte, len(icmp.LayerPayload()))
+			copy(payload, icmp.LayerPayload())
+
+			ip := make(net.IP, 4)
+			tmp := binary.BigEndian.Uint32(payload[16:20])
+			binary.BigEndian.PutUint32(ip, tmp)
+
+			return ip, nil
+		}
+	}
+	return nil, errors.New("Not an ICMPv4 Packet")
 }
 
 //###### END PACKET PARSING  #######

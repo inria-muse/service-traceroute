@@ -21,6 +21,7 @@ const (
 type Experiment struct {
 	ip                   string
 	port                 int
+	service              string
 	distance             int
 	iterations           int
 	sniffing             bool
@@ -34,6 +35,7 @@ var Experiments = []Experiment{
 	Experiment{
 		ip:                   "128.93.101.87",
 		port:                 80,
+		service:              "Youtube",
 		distance:             10,
 		iterations:           2,
 		sniffing:             false,
@@ -45,6 +47,7 @@ var Experiments = []Experiment{
 	Experiment{
 		ip:                   "193.51.224.143",
 		port:                 443,
+		service:              "Youtube",
 		distance:             15,
 		iterations:           3,
 		sniffing:             false,
@@ -56,6 +59,7 @@ var Experiments = []Experiment{
 	Experiment{
 		ip:                   "198.38.120.152",
 		port:                 443,
+		service:              "Youtube",
 		distance:             9,
 		iterations:           4,
 		sniffing:             false,
@@ -67,6 +71,7 @@ var Experiments = []Experiment{
 	Experiment{
 		ip:                   "198.38.120.154",
 		port:                 443,
+		service:              "Youtube",
 		distance:             9,
 		iterations:           4,
 		sniffing:             false,
@@ -78,6 +83,7 @@ var Experiments = []Experiment{
 	Experiment{
 		ip:                   "198.38.120.149",
 		port:                 443,
+		service:              "Youtube",
 		distance:             9,
 		iterations:           4,
 		sniffing:             false,
@@ -89,6 +95,7 @@ var Experiments = []Experiment{
 	Experiment{
 		ip:                   "198.38.120.162",
 		port:                 443,
+		service:              "Youtube",
 		distance:             9,
 		iterations:           4,
 		sniffing:             false,
@@ -164,6 +171,7 @@ func main() {
 		go traceTCPManager.StartNewConfiguredTraceTCP(
 			net.ParseIP(exp.ip),
 			exp.port,
+			exp.service,
 			exp.distance,
 			exp.iterations,
 			exp.sniffing,
