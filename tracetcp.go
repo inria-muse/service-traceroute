@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/google/gopacket"
@@ -35,7 +36,7 @@ type CapThread struct {
 
 //Used if Sniffing is TRUE
 var TCPCapThread = CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100}
-var ICMPCapThread = CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}
+var ICMPCapThread = CapThread{BPF: Icmp, Buffer: 10000, CapSize: 100}
 
 type TraceTCPJson struct {
 	Info TraceTCPInfo
@@ -51,6 +52,8 @@ type TraceTCPInfo struct {
 type TraceTCPReport struct {
 	TargetIP   string
 	TargetPort int
+	LocalIP    string
+	LocalPort  int
 	Service    string
 	Hops       []string  //IP for each hop
 	RttsAvg    []float64 //RTT AVG for each hop
@@ -105,8 +108,7 @@ type TraceTCP struct {
 	SniffICMPHandler *PcapHandler
 
 	//Used it Sniffing==False
-	SniffTCPChannel  chan gopacket.Packet
-	SniffICMPChannel chan gopacket.Packet
+	SniffChannel chan *gopacket.Packet
 
 	//Messages to be printed/stored
 	OutChan chan string
@@ -136,50 +138,41 @@ func (tt *TraceTCP) NewDefaultTraceTCP(remoteIP net.IP, localIPv4 net.IP, localI
 	tt.SetSendPacketsFlag(DefaultSendPacketsFlag)
 	tt.SetTimeout(DefaultTimeout)
 	tt.SetWaitProbeFlag(DefaultWaitProbe)
-
-	tt.SniffTCPChannel = make(chan gopacket.Packet, 1000)
-	tt.SniffICMPChannel = make(chan gopacket.Packet, 1000)
+	tt.SniffChannel = make(chan *gopacket.Packet, 1000)
 }
 
 func (tt *TraceTCP) NewConfiguredTraceTCP(configuration TraceTCPConfiguration) {
 	tt.Configuration = configuration
-
-	tt.SniffTCPChannel = make(chan gopacket.Packet, 1000)
-	tt.SniffICMPChannel = make(chan gopacket.Packet, 1000)
+	tt.SniffChannel = make(chan *gopacket.Packet, 1000)
 }
 
 func (tt *TraceTCP) Run() TraceTCPJson {
 	//Init channels
-	outChan := tt.OutChan
 	ready := make(chan bool)
-	pktChan := make(chan InputPkt, 100000)
 
 	start := time.Now().UnixNano() / int64(time.Millisecond)
 
-	//Start PCAP Handler
-	tt.SniffTCPHandler = new(PcapHandler)
-	tt.SniffICMPHandler = new(PcapHandler)
-
 	//Define PcapHandler based on sniffing flag
 	if tt.Configuration.Sniffing {
-		tt.SniffTCPHandler.NewPacketHandler(TCPCapThread, tt.Configuration.Interface, tt.Configuration.IPVersion, tt.Configuration.RemoteIP.String(), tt.Configuration.RemotePort, pktChan, outChan, ready)
-		tt.SniffICMPHandler.NewPacketHandler(ICMPCapThread, tt.Configuration.Interface, tt.Configuration.IPVersion, tt.Configuration.RemoteIP.String(), tt.Configuration.RemotePort, pktChan, outChan, ready)
-	} else {
-		tt.SniffTCPHandler.NewPacketHandlerFromChannel(tt.SniffTCPChannel, pktChan, outChan, ready)
-		tt.SniffICMPHandler.NewPacketHandlerFromChannel(tt.SniffICMPChannel, pktChan, outChan, ready)
+		//Start PCAP Handler
+		tt.SniffTCPHandler = new(PcapHandler)
+		tt.SniffICMPHandler = new(PcapHandler)
+
+		tt.SniffTCPHandler.NewPacketHandler(TCPCapThread, tt.Configuration.Interface, tt.Configuration.IPVersion, tt.Configuration.RemoteIP.String(), tt.Configuration.RemotePort, tt.SniffChannel, tt.OutChan, ready)
+		tt.SniffICMPHandler.NewPacketHandler(ICMPCapThread, tt.Configuration.Interface, tt.Configuration.IPVersion, tt.Configuration.RemoteIP.String(), tt.Configuration.RemotePort, tt.SniffChannel, tt.OutChan, ready)
+
+		//Start and wait that it is ready
+		go tt.SniffTCPHandler.Run()
+		<-ready
+
+		//Start and wait that it is ready
+		go tt.SniffICMPHandler.Run()
+		<-ready
 	}
-
-	//Start and wait that it is ready
-	go tt.SniffTCPHandler.Run()
-	<-ready
-
-	//Start and wait that it is ready
-	go tt.SniffICMPHandler.Run()
-	<-ready
 
 	//Start receiver asynchronously
 	tt.Receiver = new(Receiver)
-	tt.Receiver.NewReceiver(pktChan, tt.Configuration.StartWithEmptyPacket, tt.Configuration.LocalIPv4, tt.Configuration.LocalIPv6, outChan)
+	tt.Receiver.NewReceiver(tt.SniffChannel, tt.Configuration.StartWithEmptyPacket, tt.Configuration.LocalIPv4, tt.Configuration.LocalIPv6, tt.OutChan)
 	go tt.Receiver.Run()
 
 	var outPktChan chan []gopacket.SerializableLayer
@@ -192,7 +185,7 @@ func (tt *TraceTCP) Run() TraceTCPJson {
 	} else {
 		//Start sender asynchronously
 		tt.Sender = new(Sender)
-		tt.Sender.NewSender(tt.Configuration.Interface, tt.Receiver, outChan)
+		tt.Sender.NewSender(tt.Configuration.Interface, tt.Receiver, tt.OutChan)
 		go tt.Sender.Run()
 
 		outPktChan = tt.Sender.SendQ
@@ -211,17 +204,21 @@ func (tt *TraceTCP) Run() TraceTCPJson {
 		tt.Configuration.WaitProbe,
 		tt.Configuration.BorderIPs,
 		outPktChan,
-		outChan,
+		tt.OutChan,
 	)
 
 	report := tt.Traceroute.Run()
 
 	//Close everything and wait to synch with the thread
-	tt.SniffTCPHandler.Stop()
-	<-tt.SniffTCPHandler.DoneChan
+	if tt.SniffTCPHandler != nil {
+		tt.SniffTCPHandler.Stop()
+		<-tt.SniffTCPHandler.DoneChan
+	}
 
-	tt.SniffICMPHandler.Stop()
-	<-tt.SniffICMPHandler.DoneChan
+	if tt.SniffICMPHandler != nil {
+		tt.SniffICMPHandler.Stop()
+		<-tt.SniffICMPHandler.DoneChan
+	}
 
 	tt.Receiver.Stop()
 	<-tt.Receiver.DoneChan
@@ -237,6 +234,12 @@ func (tt *TraceTCP) Run() TraceTCPJson {
 	report.Service = tt.Configuration.Service
 	report.TargetIP = tt.Configuration.RemoteIP.String()
 	report.TargetPort = tt.Configuration.RemotePort
+	if tt.Configuration.IPVersion == V4 {
+		report.LocalIP = tt.Configuration.LocalIPv4.String()
+	} else {
+		report.LocalIP = tt.Configuration.LocalIPv6.String()
+	}
+	report.LocalPort, _ = strconv.Atoi(tt.Receiver.Curr.LocalPort.String())
 	report.TsStart = start
 	report.TsEnd = end
 
@@ -258,12 +261,12 @@ func (tt *TraceTCP) Run() TraceTCPJson {
 	return completeReport
 }
 
-func (tt *TraceTCP) InsertTCPPacket(pkt gopacket.Packet) {
-	tt.SniffTCPChannel <- pkt
+func (tt *TraceTCP) InsertTCPPacket(pkt *gopacket.Packet) {
+	tt.SniffChannel <- pkt
 }
 
-func (tt *TraceTCP) InsertICMPChannel(pkt gopacket.Packet) {
-	tt.SniffICMPChannel <- pkt
+func (tt *TraceTCP) InsertICMPChannel(pkt *gopacket.Packet) {
+	tt.SniffChannel <- pkt
 }
 
 func (tt *TraceTCP) SetLocalIPv4(localIPv4 net.IP) {

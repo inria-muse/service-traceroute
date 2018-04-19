@@ -9,10 +9,6 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-type InputPkt struct {
-	Packet gopacket.Packet
-}
-
 type PcapHandler struct {
 	BufferMb int
 	SnapLen  int
@@ -20,7 +16,7 @@ type PcapHandler struct {
 	Iface    string
 	LocalV4  net.IP
 	LocalV6  net.IP
-	PktChan  chan InputPkt
+	PktChan  chan *gopacket.Packet
 	OutChan  chan string
 	DoneChan chan bool
 	StopChan chan bool
@@ -29,10 +25,10 @@ type PcapHandler struct {
 
 	Ready        chan bool
 	Sniffing     bool //If true, uses PcapHandler, otherwise SniffingChannel
-	SniffingChan chan gopacket.Packet
+	SniffingChan chan *gopacket.Packet
 }
 
-func (ph *PcapHandler) NewPacketHandlerFromChannel(sniffingChannel chan gopacket.Packet, pktChan chan InputPkt, outChan chan string, ready chan bool) {
+func (ph *PcapHandler) NewPacketHandlerFromChannel(sniffingChannel chan *gopacket.Packet, pktChan chan *gopacket.Packet, outChan chan string, ready chan bool) {
 	ph.SniffingChan = sniffingChannel
 	ph.PktChan = pktChan
 	ph.OutChan = outChan
@@ -43,7 +39,7 @@ func (ph *PcapHandler) NewPacketHandlerFromChannel(sniffingChannel chan gopacket
 	ph.DoneChan = make(chan bool)
 }
 
-func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto string, ip string, port int, pktChan chan InputPkt, outChan chan string, ready chan bool) {
+func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto string, ip string, port int, pktChan chan *gopacket.Packet, outChan chan string, ready chan bool) {
 	ph.Iface = iface
 	ph.SnapLen = cap.CapSize
 	ph.BufferMb = cap.Buffer
@@ -122,7 +118,7 @@ func (ph *PcapHandler) RunChannelListener() {
 		case <-ph.StopChan:
 			return
 		case packet := <-ph.SniffingChan:
-			ph.PktChan <- InputPkt{Packet: packet}
+			ph.PktChan <- packet
 		}
 	}
 }
@@ -157,7 +153,7 @@ func (ph *PcapHandler) RunSniffing() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
-		ph.PktChan <- InputPkt{Packet: packet}
+		ph.PktChan <- &packet
 	}
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"math"
 	"net"
 	"time"
@@ -26,15 +25,17 @@ type BufferTrace struct {
 	BorderRouters       []net.IP
 	BorderDistance      int
 	ReachedBorderRouter bool
-	BorderCheckChan     chan CurrStatus
+	BorderCheckChan     chan *CurrStatus
 	Timeout             int
 
 	IDOffset       uint16
 	WaitProbeReply bool
 
-	DoneSend chan bool
-	OutChan  chan string
-	DoneExp  chan bool
+	StopAnalysis chan bool
+	WaitAnalysis chan bool
+	DoneSend     chan bool
+	OutChan      chan string
+	DoneExp      chan bool
 }
 
 type HopLatency struct {
@@ -59,9 +60,11 @@ func (bt *BufferTrace) NewBufferTrace(r *Receiver, maxTTL int, numberIterations 
 	bt.E2eLatencies = []int64{}
 	bt.HopLatencies = make(map[uint16][]HopLatency)
 	bt.DoneSend = make(chan bool)
+	bt.WaitAnalysis = make(chan bool)
+	bt.StopAnalysis = make(chan bool)
 	bt.OutChan = outChan
 	bt.DoneExp = make(chan bool)
-	bt.BorderCheckChan = make(chan CurrStatus, 1000)
+	bt.BorderCheckChan = make(chan *CurrStatus, 100)
 }
 
 func (bt *BufferTrace) BuildPkt() (layers.Ethernet, layers.IPv4, layers.TCP) {
@@ -159,8 +162,14 @@ func (bt *BufferTrace) SendPkts() {
 }
 
 func (bt *BufferTrace) AnalyzePackets() {
+	defer func() {
+		bt.WaitAnalysis <- true
+	}()
+
 	for {
 		select {
+		case <-bt.StopAnalysis:
+			return
 		case c := <-bt.R.FlowOutChan:
 			bt.FlowSeqMap[c.Seq+c.IpDataLen-c.TcpHLen] = c.Ts
 		case c := <-bt.R.FlowInChan:
@@ -169,8 +178,7 @@ func (bt *BufferTrace) AnalyzePackets() {
 				delete(bt.FlowSeqMap, c.Ack)
 			}
 		case c := <-bt.R.ProbeOutChan:
-			c.IpId = bt.ConvertIDfromPktID(c.IpId)
-			id := c.IpId
+			id := bt.ConvertIDfromPktID(c.IpId)
 			idMap := id % uint16(bt.MaxTtl)
 			iter := id / uint16(bt.MaxTtl)
 
@@ -185,7 +193,7 @@ func (bt *BufferTrace) AnalyzePackets() {
 			}
 
 		case c := <-bt.R.ProbeInChan:
-			var id uint16 = bt.ConvertIDfromPktID(binary.BigEndian.Uint16(c.IcmpPayload[4:6]))
+			var id uint16 = bt.ConvertIDfromPktID(c.IpIdIcmp)
 
 			c.IpId = id
 
@@ -210,7 +218,7 @@ func (bt *BufferTrace) AnalyzePackets() {
 			}
 			bt.HopLatencies[idMap][iter] = hl
 
-			bt.BorderCheckChan <- c
+			bt.BorderCheckChan <- &c
 		}
 	}
 }
@@ -259,7 +267,8 @@ func (bt *BufferTrace) Run() TraceTCPReport {
 	<-bt.DoneSend
 	<-time.After(time.Second * 2)
 	report := bt.PrintLatencies()
-	//bt.DoneExp <- true
+	bt.StopAnalysis <- true
+	<-bt.WaitAnalysis
 	return report
 }
 
@@ -304,6 +313,8 @@ func (bt *BufferTrace) WaitTrainAndCheckForBorderRouter(ttl uint16, numberIterat
 			if elapsed >= float64(bt.Timeout) {
 				return border
 			}
+
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	return border
@@ -334,6 +345,7 @@ func (bt *BufferTrace) WaitProbeAndCheckForBorderRouter(id uint16) bool {
 			if elapsed >= float64(bt.Timeout) {
 				return border
 			}
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 }

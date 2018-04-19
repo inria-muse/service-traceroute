@@ -17,7 +17,8 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-const LogTTL int64 = 300 //seconds?
+//Lifetime of logs inside the map before the expiration
+const LogTTL int64 = 180 //seconds?
 
 //Interval for Offsets
 //[start, end)
@@ -26,56 +27,59 @@ type OffsetInterval struct {
 	end   int //End of the interval (not included)
 }
 
+//Configuration of TraceTCP Manager
 type TraceTCPManagerConfiguration struct {
-	Interface string
-	BorderIPs []net.IP
-	IPVersion string
+	Interface string   //Interface used to listen/send packets
+	BorderIPs []net.IP //Router where traceTCP will stop (if flag is set to True)
+	IPVersion string   //IP version
 
-	InterIterationTime int
-	InterProbeTime     int
+	InterIterationTime int //Time between each 'train' (packets with same TTL) of packets
+	InterProbeTime     int //Time between each packet with same TTL
 
-	Timeout int
+	Timeout int //How much time to wait before giving up (packet lost)
 }
 
+//Log of TraceTCP which will be stored in the map
 type TraceTCPLog struct {
-	Report        TraceTCPJson
-	Configuration TraceTCPConfiguration
+	Report        TraceTCPJson          //Final report, if traceTCP completed
+	Configuration TraceTCPConfiguration //Configuration used for TraceTCP
 
-	IsRunning  bool
-	StartedAt  int64
-	FinishedAt int64
+	IsRunning  bool  //Flag to specify if it is running or not
+	StartedAt  int64 //When TraceTCP started
+	FinishedAt int64 //When TraceTCP finished (if not, then it is negative)
 }
 
+//Main struct for the manager of multiple TraceTCP
 type TraceTCPManager struct {
-	RunningTraceTCPs []*TraceTCP
-	AvailableOffsets []OffsetInterval
+	RunningTraceTCPs map[string]*TraceTCP //Contains all running experiments
+	AvailableOffsets []OffsetInterval     //ID intervals available for new TraceTCPs
 
 	//Configuration
-	Configuration TraceTCPManagerConfiguration
+	Configuration TraceTCPManagerConfiguration //Configuration of TraceTCP
 
 	//Input Channels (captured packets)
-	TCPChan  chan gopacket.Packet
-	ICMPChan chan gopacket.Packet
+	TCPChan  chan gopacket.Packet //Input channel for TCP packets to be forwarded to TraceTCP
+	ICMPChan chan gopacket.Packet //Input channel for ICMP packets to be forwarded to TraceTCP
 
 	//Output Channels
 	OutPacketChan chan []gopacket.SerializableLayer //packets to be transmitted
 	OutChan       chan string                       //data to be printed/stored
 
 	//Channel to stop TraceTCPManager
-	StopChan chan bool
+	StopChan chan bool //To stop the manager
 
 	//Local IPs
-	LocalIPv4 net.IP
-	LocalIPv6 net.IP
+	LocalIPv4 net.IP //Local IPv4 of the machine running this library
+	LocalIPv6 net.IP //Local IPv6 of the machine running this library
 
 	//Mutex
-	offsetMutex        *sync.Mutex
-	runningTracesMutex *sync.Mutex
-	logsMapMutex       *sync.Mutex
+	offsetMutex        *sync.Mutex //Mutex for offset array
+	runningTracesMutex *sync.Mutex //Mutex for running TraceTCP array
+	logsMapMutex       *sync.Mutex //Mutex for map with logs
 
 	//Results
-	LogsMap    map[string]TraceTCPLog
-	LogsMapTTL int64 //time to live for data in logs map when the experiment is finished
+	LogsMap    map[string]TraceTCPLog //Contains the running experiments and the results of those finished in the last 3 minutes
+	LogsMapTTL int64                  //time to live for data in logs map when the experiment is finished
 }
 
 //NewTraceTCPManager initialize the manager of multiple TraceTCP experiments
@@ -96,7 +100,7 @@ func (tm *TraceTCPManager) NewTraceTCPManager(iface string, ipVersion string, bo
 	tm.runningTracesMutex = &sync.Mutex{}
 	tm.logsMapMutex = &sync.Mutex{}
 
-	tm.RunningTraceTCPs = make([]*TraceTCP, 0)
+	tm.RunningTraceTCPs = make(map[string]*TraceTCP)
 	tm.AvailableOffsets = make([]OffsetInterval, 1)
 	tm.LogsMap = make(map[string]TraceTCPLog)
 	tm.LogsMapTTL = LogTTL
@@ -120,6 +124,7 @@ func (tm *TraceTCPManager) NewTraceTCPManager(iface string, ipVersion string, bo
 	return nil
 }
 
+//Start the multiplexer for input packets. It forwards the input packets to the correct traceTCP
 func (tm *TraceTCPManager) Run() {
 	//Multiplexing of data between the running TraceTCPs and external process
 	for {
@@ -127,7 +132,7 @@ func (tm *TraceTCPManager) Run() {
 		case <-tm.StopChan:
 			return
 		case tcpPacket := <-tm.TCPChan:
-			ip1, port1, ip2, port2, err := tm.GetFlowIDFromTCPPacket(tcpPacket)
+			ip1, port1, ip2, port2, err := tm.GetFlowIDFromTCPPacket(&tcpPacket)
 
 			if err != nil {
 				//ERROR: skip packet
@@ -141,30 +146,29 @@ func (tm *TraceTCPManager) Run() {
 				continue
 			}
 
-			tracetcp.InsertTCPPacket(tcpPacket)
+			tracetcp.SniffChannel <- &tcpPacket
 
 		case icmpPacket := <-tm.ICMPChan:
-			id, err := tm.GetIPIDFromICMPPacket(icmpPacket)
-
-			dstIp, _ := tm.GetDstIPFromICMPPacket(icmpPacket)
+			dstIp, err := tm.GetDstIPFromICMPPacket(&icmpPacket)
 
 			if err != nil {
 				//ERROR: skip packet
 				continue
 			}
 
-			tracetcp := tm.GetTraceTCPExperimentFromID(id)
+			tracetcp := tm.GetTraceTCPExperimentFromRemoteIP(dstIp)
 
 			if tracetcp == nil || tracetcp.Configuration.RemoteIP.String() != dstIp.String() {
 				//ERROR: skip packet
 				continue
 			}
 
-			tracetcp.InsertICMPChannel(icmpPacket)
+			tracetcp.SniffChannel <- &icmpPacket
 		}
 	}
 }
 
+//Stop the multiplexer (Run() function)
 func (tm *TraceTCPManager) Stop() {
 	tm.StopChan <- true
 }
@@ -173,6 +177,8 @@ func (tm *TraceTCPManager) Stop() {
 //Must be run on a thread, otherwise it locks the thread until the end
 //If there is no space (i.e. no available offset spot), return error
 func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePort int, service string, maxDistance int, numberIterations int, sniffing bool, canSendPkts bool, waitProbeReply bool, stopWithBorderRouters bool, startWithEmptyPacket bool) error {
+	tm.ClearLogsMap()
+
 	//check that there aren't any other TraceTCP to the same remote IP
 	if tm.CheckExistanceTraceTCPExperiment(remoteIP) {
 		return errors.New("TraceTCP to " + remoteIP.String() + " is already running")
@@ -247,9 +253,9 @@ func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePor
 
 	//Run TraceTCP
 	report := tracetcp.Run()
-
 	log.Report = report
 	log.FinishedAt = time.Now().UnixNano()
+	log.IsRunning = false
 
 	tm.UpdateLogsMap(log)
 
@@ -319,17 +325,16 @@ func (tm *TraceTCPManager) FreeInterval(offsetInterval OffsetInterval) {
 	tm.offsetMutex.Unlock()
 }
 
+//Check if there is an already running experiments
+//However, if it says that there are no traceTCP to the remoteIP, it may happen  that
+//a new experiment may be added immediately after it.
 func (tm *TraceTCPManager) CheckExistanceTraceTCPExperiment(remoteIp net.IP) bool {
 	exists := false
 
 	tm.runningTracesMutex.Lock()
 
-	for _, runningTraceTCP := range tm.RunningTraceTCPs {
-		//Check if flows IDs corresponds (checking both directions)
-		if runningTraceTCP.Configuration.RemoteIP.String() == remoteIp.String() {
-			exists = true
-			break
-		}
+	if _, ok := tm.RunningTraceTCPs[remoteIp.String()]; ok {
+		exists = true
 	}
 
 	tm.runningTracesMutex.Unlock()
@@ -337,49 +342,37 @@ func (tm *TraceTCPManager) CheckExistanceTraceTCPExperiment(remoteIp net.IP) boo
 	return exists
 }
 
+//Check if there is an already running experiments
+//If not, it adds the given TraceTCP into the list of running experiments
 func (tm *TraceTCPManager) CheckAndAddTraceTCPExperiment(tracetcp *TraceTCP) bool {
 	exists := false
 
 	tm.runningTracesMutex.Lock()
 
-	for _, runningTraceTCP := range tm.RunningTraceTCPs {
-		//Check if flows IDs corresponds (checking both directions)
-		if runningTraceTCP.Configuration.RemoteIP.String() == tracetcp.Configuration.RemoteIP.String() {
-			exists = true
-			break
-		}
+	if _, ok := tm.RunningTraceTCPs[tracetcp.Configuration.RemoteIP.String()]; ok {
+		exists = true
 	}
 
 	if !exists {
-		tm.RunningTraceTCPs = append(tm.RunningTraceTCPs, tracetcp)
+		tm.RunningTraceTCPs[tracetcp.Configuration.RemoteIP.String()] = tracetcp
 	}
 
 	tm.runningTracesMutex.Unlock()
 	return exists
 }
 
+//Remove the input tracetcp from the array of running experiments
 func (tm *TraceTCPManager) RemoveTraceTCPExperiment(tracetcp *TraceTCP) {
 	tm.runningTracesMutex.Lock()
 
-	i := -1
-
-	//Search the index of the experiment which finished
-	for index, trace := range tm.RunningTraceTCPs {
-		if trace == nil {
-			continue
-		}
-
-		if tracetcp.Configuration.RemoteIP.String() == trace.Configuration.RemoteIP.String() {
-			i = index
-			break
-		}
+	if _, ok := tm.RunningTraceTCPs[tracetcp.Configuration.RemoteIP.String()]; ok {
+		delete(tm.RunningTraceTCPs, tracetcp.Configuration.RemoteIP.String())
 	}
-	//Remove the experiment from the array
-	tm.RunningTraceTCPs = append(tm.RunningTraceTCPs[:i], tm.RunningTraceTCPs[i+1:]...)
 
 	tm.runningTracesMutex.Unlock()
 }
 
+//Return TraceTCP which contains the input IP ID
 func (tm *TraceTCPManager) GetTraceTCPExperimentFromID(id uint16) *TraceTCP {
 	tm.runningTracesMutex.Lock()
 
@@ -421,6 +414,26 @@ func (tm *TraceTCPManager) GetTraceTCPExperimentFromFlowID(ip1 net.IP, port1 int
 	return tracetcp
 }
 
+//GetTraceTCPExperimentFromRemoteIP return the TraceTCP which has the input remoteIP as destination
+func (tm *TraceTCPManager) GetTraceTCPExperimentFromRemoteIP(remoteIP net.IP) *TraceTCP {
+	tm.runningTracesMutex.Lock()
+
+	var tracetcp *TraceTCP
+
+	for _, runningTraceTCP := range tm.RunningTraceTCPs {
+		//Check if flows IDs corresponds (checking both directions)
+		if runningTraceTCP.Configuration.RemoteIP.String() == remoteIP.String() {
+			tracetcp = runningTraceTCP
+			break
+		}
+	}
+
+	tm.runningTracesMutex.Unlock()
+
+	return tracetcp
+}
+
+//Return the number of running TraceTCP
 func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
 	tm.runningTracesMutex.Lock()
 
@@ -431,6 +444,7 @@ func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
 	return numberRunningExps
 }
 
+//Return the log of a TraceTCP to remoteIP
 func (tm *TraceTCPManager) GetLog(remoteIp string) (TraceTCPLog, error) {
 	var log TraceTCPLog = TraceTCPLog{}
 	var err error = nil
@@ -450,6 +464,7 @@ func (tm *TraceTCPManager) GetLog(remoteIp string) (TraceTCPLog, error) {
 	return log, err
 }
 
+//Remove old logs and add/update the input log
 func (tm *TraceTCPManager) UpdateLogsMap(log TraceTCPLog) error {
 	tm.ClearLogsMap()
 
@@ -462,6 +477,7 @@ func (tm *TraceTCPManager) UpdateLogsMap(log TraceTCPLog) error {
 	return err
 }
 
+//Remove a given log from the map
 func (tm *TraceTCPManager) RemoveLogsMap(log TraceTCPLog) error {
 	var err error = nil
 
@@ -474,6 +490,7 @@ func (tm *TraceTCPManager) RemoveLogsMap(log TraceTCPLog) error {
 	return err
 }
 
+//Remove all old logs
 func (tm *TraceTCPManager) ClearLogsMap() {
 	tm.logsMapMutex.Lock()
 
@@ -495,25 +512,25 @@ func (tm *TraceTCPManager) ClearLogsMap() {
 //###### END MUTEX  #######
 
 //###### PACKET PARSING  #######
-
-func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket gopacket.Packet) (net.IP, int, net.IP, int, error) {
+//Get the Flow ID from a TCP packet
+func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
 	var ip1 net.IP
 	var ip2 net.IP
 	var port1 int
 	var port2 int
 	var err error
 
-	if ip4Layer := tcpPacket.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
+	if ip4Layer := (*tcpPacket).Layer(layers.LayerTypeIPv4); ip4Layer != nil {
 		ip1 = ip4Layer.(*layers.IPv4).SrcIP
 		ip2 = ip4Layer.(*layers.IPv4).DstIP
-	} else if ip6Layer := tcpPacket.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
+	} else if ip6Layer := (*tcpPacket).Layer(layers.LayerTypeIPv6); ip6Layer != nil {
 		ip1 = ip6Layer.(*layers.IPv4).SrcIP
 		ip2 = ip6Layer.(*layers.IPv4).DstIP
 	} else {
 		err = errors.New("No IPv4 Packet")
 	}
 
-	if tcpLayer := tcpPacket.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+	if tcpLayer := (*tcpPacket).Layer(layers.LayerTypeTCP); tcpLayer != nil {
 		port1 = tm.ConvertPort(tcpLayer.(*layers.TCP).SrcPort.String())
 		port2 = tm.ConvertPort(tcpLayer.(*layers.TCP).DstPort.String())
 	} else {
@@ -523,8 +540,9 @@ func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket gopacket.Packet) (ne
 	return ip1, port1, ip2, port2, err
 }
 
-func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket gopacket.Packet) (uint16, error) {
-	if icmp4Layer := icmpPacket.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
+//Return the IPID contained in the ICMP payload
+func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket *gopacket.Packet) (uint16, error) {
+	if icmp4Layer := (*icmpPacket).Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 
 		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
@@ -539,16 +557,17 @@ func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket gopacket.Packet) (ui
 	return 0, errors.New("Not an ICMPv4 Packet")
 }
 
-func (tm *TraceTCPManager) GetDstIPFromICMPPacket(icmpPacket gopacket.Packet) (net.IP, error) {
-	if icmp4Layer := icmpPacket.Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
+//Return the final destination of traceTCP probe from the payload of ICMP
+func (tm *TraceTCPManager) GetDstIPFromICMPPacket(icmpPacket *gopacket.Packet) (net.IP, error) {
+	if icmp4Layer := (*icmpPacket).Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 
 		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
-			payload := make([]byte, len(icmp.LayerPayload()))
-			copy(payload, icmp.LayerPayload())
+			// payload := make([]byte, len(icmp.LayerPayload()))
+			// copy(payload, icmp.LayerPayload())
 
 			ip := make(net.IP, 4)
-			tmp := binary.BigEndian.Uint32(payload[16:20])
+			tmp := binary.BigEndian.Uint32(icmp.LayerPayload()[16:20])
 			binary.BigEndian.PutUint32(ip, tmp)
 
 			return ip, nil
