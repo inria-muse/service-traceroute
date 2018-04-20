@@ -108,8 +108,10 @@ func (r *Receiver) ParseTcpOut(pkt *gopacket.Packet, tcp *layers.TCP) {
 		return
 	}
 
-	r.Curr.Seq = tcp.Seq
-	r.Curr.Ack = tcp.Ack
+	if !r.HasSentSend || r.Curr.LocalPort.String() == tcp.SrcPort.String() {
+		r.Curr.Seq = tcp.Seq
+		r.Curr.Ack = tcp.Ack
+	}
 
 	if !r.StartWithEmptyPacket && len(tcp.Payload) == 0 {
 		return
