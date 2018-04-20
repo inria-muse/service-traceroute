@@ -200,6 +200,7 @@ func main() {
 	traceTCPManager.SetOutChan(outChan)
 
 	//traceTCPManager.AddBorderRouters(net.ParseIP("195.220.98.17"))
+	traceTCPManager.LoadBorderRouters("border_routers.txt")
 
 	traceTCPManager.SetOutPktsChan(queue)
 	traceTCPManager.SetTCPInChan(traceTCPChan)

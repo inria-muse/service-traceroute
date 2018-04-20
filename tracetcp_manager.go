@@ -1,11 +1,13 @@
 package tracetcp
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -626,6 +628,28 @@ func (tm *TraceTCPManager) SetBorderRouters(borderIPs []net.IP) {
 
 func (tm *TraceTCPManager) AddBorderRouters(borderIPs ...net.IP) {
 	tm.Configuration.BorderIPs = append(tm.Configuration.BorderIPs, borderIPs...)
+}
+
+func (tm *TraceTCPManager) LoadBorderRouters(filename string) error {
+	file, err := os.Open(filename)
+
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		tm.AddBorderRouters(net.ParseIP(scanner.Text()))
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (tm *TraceTCPManager) GetBorderRouters() []net.IP {
