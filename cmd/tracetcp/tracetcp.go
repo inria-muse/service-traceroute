@@ -14,10 +14,6 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-const (
-	Version = "0.1" // MAKE SURE TO INCREMENT AFTER EVERY CHANGE
-)
-
 type Experiment struct {
 	ip                   string
 	port                 int
@@ -108,7 +104,7 @@ var Experiments = []Experiment{
 
 func checkFlags(version bool, iface string) {
 	if version {
-		fmt.Printf("%s\n", Version)
+		fmt.Printf("%s\n", tracetcp.Version)
 		os.Exit(0)
 	}
 
@@ -145,15 +141,15 @@ func main() {
 	queue := make(chan []gopacket.SerializableLayer, 1000)
 	go startSender(iface, queue)
 
-	tcpChanInputPkt, icmpChanInputPkt := startListener(iface, V4, outChan)
+	tcpChanInputPkt, icmpChanInputPkt := startListener(iface, tracetcp.V4, outChan)
 
 	tcpChan := make(chan gopacket.Packet, 1000)
 	icmpChan := make(chan gopacket.Packet, 1000)
 
 	go converter(tcpChanInputPkt, tcpChan, icmpChanInputPkt, icmpChan)
 
-	traceTCPManager := new(TraceTCPManager)
-	traceTCPManager.NewTraceTCPManager(iface, V4, nil)
+	traceTCPManager := new(tracetcp.TraceTCPManager)
+	traceTCPManager.NewTraceTCPManager(iface, tracetcp.V4, nil)
 
 	traceTCPManager.SetOutChan(outChan)
 
@@ -192,12 +188,12 @@ func main() {
 	outChan <- "Finished"
 }
 
-func startListener(iface string, ipVersion string, outchan chan string) (chan InputPkt, chan InputPkt) {
-	var TCPCapThread = CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100}
-	var ICMPCapThread = CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}
+func startListener(iface string, ipVersion string, outchan chan string) (chan tracetcp.InputPkt, chan tracetcp.InputPkt) {
+	var TCPCapThread = tracetcp.CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100}
+	var ICMPCapThread = tracetcp.CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}
 
-	tcpChan := make(chan InputPkt, 1000)
-	icmpChan := make(chan InputPkt, 1000)
+	tcpChan := make(chan tracetcp.InputPkt, 1000)
+	icmpChan := make(chan tracetcp.InputPkt, 1000)
 	readyChan := make(chan bool)
 
 	tcpHandler := new(PcapHandler)
@@ -262,7 +258,7 @@ func startSender(iface string, sendQueue chan []gopacket.SerializableLayer) {
 	}
 }
 
-func converter(tcpChan chan InputPkt, tcpChanConverted chan gopacket.Packet, icmpChan chan InputPkt, icmpChanConverted chan gopacket.Packet) {
+func converter(tcpChan chan tracetcp.InputPkt, tcpChanConverted chan gopacket.Packet, icmpChan chan tracetcp.InputPkt, icmpChanConverted chan gopacket.Packet) {
 	for {
 		select {
 		case packet := <-tcpChan:

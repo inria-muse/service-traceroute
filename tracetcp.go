@@ -1,4 +1,4 @@
-package main
+package tracetcp
 
 import (
 	"encoding/json"
@@ -7,6 +7,10 @@ import (
 	"time"
 
 	"github.com/google/gopacket"
+)
+
+const (
+	Version = "0.1" // MAKE SURE TO INCREMENT AFTER EVERY CHANGE
 )
 
 const (

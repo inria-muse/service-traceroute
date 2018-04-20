@@ -1,4 +1,4 @@
-package main
+package tracetcp
 
 import (
 	"encoding/binary"
@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"tcpmodule/tracetcp"
 	"time"
 
 	"github.com/google/gopacket"
@@ -213,7 +212,7 @@ func (tm *TraceTCPManager) StartNewConfiguredTraceTCP(remoteIP net.IP, remotePor
 		CanSendPackets:       canSendPkts,
 		InterIterationTime:   tm.Configuration.InterIterationTime,
 		InterProbeTime:       tm.Configuration.InterProbeTime,
-		IPVersion:            tracetcp.V4,
+		IPVersion:            V4,
 		Iterations:           numberIterations,
 		LocalIPv4:            tm.LocalIPv4,
 		LocalIPv6:            tm.LocalIPv6,
