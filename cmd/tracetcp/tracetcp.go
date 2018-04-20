@@ -9,6 +9,8 @@ import (
 	"os"
 	"time"
 
+	"tracetcp"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
@@ -141,12 +143,7 @@ func main() {
 	queue := make(chan []gopacket.SerializableLayer, 1000)
 	go startSender(iface, queue)
 
-	tcpChanInputPkt, icmpChanInputPkt := startListener(iface, tracetcp.V4, outChan)
-
-	tcpChan := make(chan gopacket.Packet, 1000)
-	icmpChan := make(chan gopacket.Packet, 1000)
-
-	go converter(tcpChanInputPkt, tcpChan, icmpChanInputPkt, icmpChan)
+	tcpChan, icmpChan := startListener(iface, tracetcp.V4, outChan)
 
 	traceTCPManager := new(tracetcp.TraceTCPManager)
 	traceTCPManager.NewTraceTCPManager(iface, tracetcp.V4, nil)
@@ -188,20 +185,20 @@ func main() {
 	outChan <- "Finished"
 }
 
-func startListener(iface string, ipVersion string, outchan chan string) (chan tracetcp.InputPkt, chan tracetcp.InputPkt) {
-	var TCPCapThread = tracetcp.CapThread{BPF: Tcp, Buffer: 10000, CapSize: 100}
-	var ICMPCapThread = tracetcp.CapThread{BPF: Icmp, Buffer: 10000, CapSize: 1000}
+func startListener(iface string, ipVersion string, outchan chan string) (chan gopacket.Packet, chan gopacket.Packet) {
+	var TCPCapThread = tracetcp.CapThread{BPF: tracetcp.Tcp, Buffer: 10000, CapSize: 100}
+	var ICMPCapThread = tracetcp.CapThread{BPF: tracetcp.Icmp, Buffer: 10000, CapSize: 1000}
 
-	tcpChan := make(chan tracetcp.InputPkt, 1000)
-	icmpChan := make(chan tracetcp.InputPkt, 1000)
+	tcpChan := make(chan gopacket.Packet, 1000)
+	icmpChan := make(chan gopacket.Packet, 1000)
 	readyChan := make(chan bool)
 
-	tcpHandler := new(PcapHandler)
+	tcpHandler := new(PcapExt)
 	tcpHandler.NewPacketHandler(TCPCapThread, iface, ipVersion, "", 0, tcpChan, outchan, readyChan)
 	go tcpHandler.Run()
 	<-readyChan
 
-	icmpHandler := new(PcapHandler)
+	icmpHandler := new(PcapExt)
 	icmpHandler.NewPacketHandler(ICMPCapThread, iface, ipVersion, "", 0, icmpChan, outchan, readyChan)
 	go icmpHandler.Run()
 	<-readyChan
@@ -254,17 +251,6 @@ func startSender(iface string, sendQueue chan []gopacket.SerializableLayer) {
 			if err = handle.WritePacketData(buf.Bytes()); err != nil {
 				log.Fatal(err)
 			}
-		}
-	}
-}
-
-func converter(tcpChan chan tracetcp.InputPkt, tcpChanConverted chan gopacket.Packet, icmpChan chan tracetcp.InputPkt, icmpChanConverted chan gopacket.Packet) {
-	for {
-		select {
-		case packet := <-tcpChan:
-			tcpChanConverted <- packet.Packet
-		case packet := <-icmpChan:
-			icmpChanConverted <- packet.Packet
 		}
 	}
 }
