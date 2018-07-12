@@ -10,6 +10,7 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
+//Structure to decode incoming packets
 type Receiver struct {
 	PktChan              chan *gopacket.Packet
 	LocalV4              net.IP
@@ -28,6 +29,15 @@ type Receiver struct {
 	DoneChan chan bool
 }
 
+//TCP Flags
+type Flags struct {
+	SYN bool
+	ACK bool
+	RST bool
+	FIN bool
+}
+
+//Current status of an application flow
 type CurrStatus struct {
 	Ts         int64
 	LocalHw    net.HardwareAddr
@@ -39,8 +49,8 @@ type CurrStatus struct {
 	IpId       uint16
 	IpIdIcmp   uint16
 	IpTtl      uint8
-	LocalPort  layers.TCPPort
-	RemPort    layers.TCPPort
+	LocalPort  uint16
+	RemPort    uint16
 	Seq        uint32
 	Ack        uint32
 	TcpHLen    uint32
@@ -48,14 +58,17 @@ type CurrStatus struct {
 	IPv6       bool
 	Dir        int
 	IpDataLen  uint32
+	TcpFlags   Flags
 	Transport  layers.IPProtocol
 }
 
+//Direction of the packet
 const (
 	In  = 0
 	Out = 1
 )
 
+//Initialize and configure a new receiver
 func (r *Receiver) NewReceiver(pktChan chan *gopacket.Packet, startWithEmptyPacket bool, hostV4 net.IP, hostV6 net.IP, outChan chan string) {
 	r.PktChan = pktChan
 	r.LocalV4 = hostV4
@@ -76,6 +89,7 @@ func (r *Receiver) NewReceiver(pktChan chan *gopacket.Packet, startWithEmptyPack
 	r.DoneChan = make(chan bool)
 }
 
+//Parse the Hardware addresses from the ethernet layer
 func (r *Receiver) GetHardwareAddresses(pkt *gopacket.Packet) {
 	ethLayer := (*pkt).Layer(layers.LayerTypeEthernet)
 	eth, _ := ethLayer.(*layers.Ethernet)
@@ -83,15 +97,8 @@ func (r *Receiver) GetHardwareAddresses(pkt *gopacket.Packet) {
 	r.Curr.RemHw = eth.DstMAC
 }
 
-func (r *Receiver) ParseTcpIn(pkt *gopacket.Packet, tcp *layers.TCP) {
-	if tcp.SYN == true {
-		r.Curr.Ack++
-	}
-	var c CurrStatus = r.Curr
-	r.FlowInChan <- c
-}
-
-func (r *Receiver) IsProbePacket(pkt *gopacket.Packet, tcp *layers.TCP) bool {
+//Return if the last packet is a probe or not
+func (r *Receiver) IsProbePacket() bool {
 	if r.Curr.IPv4 {
 		if r.Curr.IpTtl <= 32 {
 			return true
@@ -101,14 +108,34 @@ func (r *Receiver) IsProbePacket(pkt *gopacket.Packet, tcp *layers.TCP) bool {
 	return false
 }
 
+//Parse the incoming TCP packet
+func (r *Receiver) ParseTcpIn(pkt *gopacket.Packet, tcp *layers.TCP) {
+	r.Curr.TcpFlags.ACK = tcp.ACK
+	r.Curr.TcpFlags.RST = tcp.RST
+	r.Curr.TcpFlags.FIN = tcp.FIN
+	r.Curr.TcpFlags.SYN = tcp.SYN
+
+	if tcp.SYN == true {
+		r.Curr.Ack++
+	}
+	var c CurrStatus = r.Curr
+	r.FlowInChan <- c
+}
+
+//Parse the outgoing TCP packet
 func (r *Receiver) ParseTcpOut(pkt *gopacket.Packet, tcp *layers.TCP) {
-	if r.IsProbePacket(pkt, tcp) {
+	r.Curr.TcpFlags.ACK = tcp.ACK
+	r.Curr.TcpFlags.RST = tcp.RST
+	r.Curr.TcpFlags.FIN = tcp.FIN
+	r.Curr.TcpFlags.SYN = tcp.SYN
+
+	if r.IsProbePacket() {
 		var c CurrStatus = r.Curr
 		r.ProbeOutChan <- c
 		return
 	}
 
-	if !r.HasSentSend || r.Curr.LocalPort.String() == tcp.SrcPort.String() {
+	if !r.HasSentSend || r.Curr.LocalPort == uint16(tcp.SrcPort) {
 		r.Curr.Seq = tcp.Seq
 		r.Curr.Ack = tcp.Ack
 	}
@@ -124,8 +151,8 @@ func (r *Receiver) ParseTcpOut(pkt *gopacket.Packet, tcp *layers.TCP) {
 		r.GetHardwareAddresses(pkt)
 		r.Curr.TCPLocalIp = r.Curr.LocalIp
 		r.Curr.TCPRemIp = r.Curr.RemIp
-		r.Curr.LocalPort = tcp.SrcPort
-		r.Curr.RemPort = tcp.DstPort
+		r.Curr.LocalPort = uint16(tcp.SrcPort)
+		r.Curr.RemPort = uint16(tcp.DstPort)
 
 		r.SendStartChan <- true
 		r.HasSentSend = true
@@ -134,6 +161,7 @@ func (r *Receiver) ParseTcpOut(pkt *gopacket.Packet, tcp *layers.TCP) {
 	r.FlowOutChan <- c
 }
 
+//Parse the TCP layer
 func (r *Receiver) ParseTcpLayer(pkt *gopacket.Packet) error {
 	tcpLayer := (*pkt).Layer(layers.LayerTypeTCP)
 	if tcpLayer == nil {
@@ -141,9 +169,7 @@ func (r *Receiver) ParseTcpLayer(pkt *gopacket.Packet) error {
 	}
 
 	tcp, _ := tcpLayer.(*layers.TCP)
-	//May cause problems when parsing probes
-	//r.Curr.Seq = tcp.Seq
-	//r.Curr.Ack = tcp.Ack
+
 	r.Curr.TcpHLen = uint32(tcp.DataOffset * 4)
 	if r.Curr.Dir == In {
 		r.ParseTcpIn(pkt, tcp)
@@ -153,6 +179,57 @@ func (r *Receiver) ParseTcpLayer(pkt *gopacket.Packet) error {
 	return nil
 }
 
+//Parse incoming UDP packet
+func (r *Receiver) ParseUdpIn(pkt *gopacket.Packet, udp *layers.UDP) {
+	var c CurrStatus = r.Curr
+	r.FlowInChan <- c
+}
+
+//Parse outgoing UDP packet
+func (r *Receiver) ParseUdpOut(pkt *gopacket.Packet, udp *layers.UDP) {
+	if r.IsProbePacket() {
+		var c CurrStatus = r.Curr
+		r.ProbeOutChan <- c
+		return
+	}
+
+	if !r.StartWithEmptyPacket && len(udp.Payload) == 0 {
+		return
+	}
+
+	if r.HasSentSend == false {
+		r.GetHardwareAddresses(pkt)
+		r.Curr.TCPLocalIp = r.Curr.LocalIp
+		r.Curr.TCPRemIp = r.Curr.RemIp
+		r.Curr.LocalPort = uint16(udp.SrcPort)
+		r.Curr.RemPort = uint16(udp.DstPort)
+
+		r.SendStartChan <- true
+		r.HasSentSend = true
+	}
+	var c CurrStatus = r.Curr
+	r.FlowOutChan <- c
+}
+
+//Parse UDP layer
+func (r *Receiver) ParseUdpLayer(pkt *gopacket.Packet) error {
+	udpLayer := (*pkt).Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return errors.New("not a UDP pkt")
+	}
+
+	udp, _ := udpLayer.(*layers.UDP)
+
+	r.Curr.TcpHLen = 0
+	if r.Curr.Dir == In {
+		r.ParseUdpIn(pkt, udp)
+	} else {
+		r.ParseUdpOut(pkt, udp)
+	}
+	return nil
+}
+
+//Parse ICMP layer (supported only IPv4)
 func (r *Receiver) ParseIcmpLayer(pkt *gopacket.Packet) error {
 	if r.Curr.Dir == Out {
 		return errors.New("Outgoing ICMP")
@@ -162,15 +239,13 @@ func (r *Receiver) ParseIcmpLayer(pkt *gopacket.Packet) error {
 		if icmp.TypeCode.Type() == layers.ICMPv4TypeTimeExceeded {
 			var c CurrStatus = r.Curr
 			c.IpIdIcmp = binary.BigEndian.Uint16(icmp.LayerPayload()[4:6])
-			// c.IcmpPayload = make([]byte, len(icmp.LayerPayload()))
-			// copy(c.IcmpPayload, icmp.LayerPayload())
 			r.ProbeInChan <- c
 		}
 	}
-	//TODO: ICMPv6
 	return nil
 }
 
+//Parse the IP layer
 func (r *Receiver) ParseIpLayer(pkt *gopacket.Packet) error {
 	if ip4Layer := (*pkt).Layer(layers.LayerTypeIPv4); ip4Layer != nil {
 		ip := ip4Layer.(*layers.IPv4)
@@ -212,6 +287,7 @@ func (r *Receiver) ParseIpLayer(pkt *gopacket.Packet) error {
 	return nil
 }
 
+//Start listening on the channel for packets to be parsed and sent to traceroute for the analysis
 func (r *Receiver) Run() {
 	defer func() {
 		r.DoneChan <- true
@@ -230,7 +306,11 @@ func (r *Receiver) Run() {
 				if err != nil {
 					//Error during parsing
 				}
-
+			case r.Curr.Transport == layers.IPProtocolUDP:
+				err := r.ParseUdpLayer(pkt)
+				if err != nil {
+					//Error during parsing
+				}
 			case r.Curr.Transport == layers.IPProtocolICMPv4 || r.Curr.Transport == layers.IPProtocolICMPv6:
 				err := r.ParseIcmpLayer(pkt)
 				if err != nil {
@@ -243,6 +323,7 @@ func (r *Receiver) Run() {
 	}
 }
 
+//Stop the receiver
 func (r *Receiver) Stop() {
 	r.StopChan <- true
 }

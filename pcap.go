@@ -9,37 +9,27 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+//Structure of the sniffer
 type PcapHandler struct {
 	BufferMb int
 	SnapLen  int
+	Port     uint16
 	Filter   string
 	Iface    string
 	LocalV4  net.IP
 	LocalV6  net.IP
-	PktChan  chan *gopacket.Packet
+	PktChan  chan gopacket.Packet
 	OutChan  chan string
 	DoneChan chan bool
 	StopChan chan bool
 
 	Handler *pcap.Handle
 
-	Ready        chan bool
-	Sniffing     bool //If true, uses PcapHandler, otherwise SniffingChannel
-	SniffingChan chan *gopacket.Packet
+	Ready chan bool
 }
 
-func (ph *PcapHandler) NewPacketHandlerFromChannel(sniffingChannel chan *gopacket.Packet, pktChan chan *gopacket.Packet, outChan chan string, ready chan bool) {
-	ph.SniffingChan = sniffingChannel
-	ph.PktChan = pktChan
-	ph.OutChan = outChan
-	ph.Ready = ready
-	ph.Sniffing = false
-
-	ph.StopChan = make(chan bool)
-	ph.DoneChan = make(chan bool)
-}
-
-func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto string, ip string, port int, pktChan chan *gopacket.Packet, outChan chan string, ready chan bool) {
+//Initialize and configure a new sniffer
+func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, ip string, pktChan chan gopacket.Packet, outChan chan string, ready chan bool) {
 	ph.Iface = iface
 	ph.SnapLen = cap.CapSize
 	ph.BufferMb = cap.Buffer
@@ -47,8 +37,8 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 	ph.PktChan = pktChan
 	ph.OutChan = outChan
 	ph.Ready = ready
-	ph.Sniffing = true
 	ph.DoneChan = make(chan bool)
+	ph.Port = cap.Port
 
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
@@ -69,14 +59,16 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 				case *net.IPNet:
 					if v.IP.IsGlobalUnicast() && v.IP.To4() != nil {
 						ph.LocalV4 = (*v).IP
-						if proto == V4 {
-							validAddress = true
-						}
-					} else if v.IP.IsGlobalUnicast() && v.IP.To16() != nil {
+						validAddress = true
+						// if proto == V4 {
+						// 	validAddress = true
+						// }
+					} else if v.IP.To16() != nil {
 						ph.LocalV6 = (*v).IP
-						if proto == V6 {
-							validAddress = true
-						}
+						validAddress = true
+						// if proto == V6 {
+						// 	validAddress = true
+						// }
 					}
 				}
 			}
@@ -87,43 +79,17 @@ func (ph *PcapHandler) NewPacketHandler(cap CapThread, iface string, proto strin
 		log.Fatal("No valid IP for interface")
 	}
 
-	if ip != "" && cap.BPF != Icmp {
+	if ip != "" {
 		ph.Filter += " and host " + ip
 	}
 
-	if port != 0 && cap.BPF != Icmp {
-		ph.Filter += " and port " + fmt.Sprintf("%d", port)
+	if ph.Port != 0 {
+		ph.Filter += " and port " + fmt.Sprintf("%d", ph.Port)
 	}
-
-	//fmt.Printf("Filters %s\n", ph.Filter)
 }
 
+//Run the sniffer on a specific interface and the filters given in input during the initialization
 func (ph *PcapHandler) Run() {
-	if ph.Sniffing {
-		ph.RunSniffing()
-	} else {
-		ph.RunChannelListener()
-	}
-}
-
-func (ph *PcapHandler) RunChannelListener() {
-	ph.Ready <- true
-
-	defer func() {
-		ph.DoneChan <- true
-	}()
-
-	for {
-		select {
-		case <-ph.StopChan:
-			return
-		case packet := <-ph.SniffingChan:
-			ph.PktChan <- packet
-		}
-	}
-}
-
-func (ph *PcapHandler) RunSniffing() {
 	inactiveHandle, err := pcap.NewInactiveHandle(ph.Iface)
 	if err != nil {
 		log.Fatal(err)
@@ -153,15 +119,11 @@ func (ph *PcapHandler) RunSniffing() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for packet := range packetSource.Packets() {
-		ph.PktChan <- &packet
+		ph.PktChan <- packet
 	}
 }
 
-//TODO: stop sniffing with pcap handler
+//Stop the sniffer
 func (ph *PcapHandler) Stop() {
-	if ph.Sniffing {
-		ph.Handler.Close()
-	} else {
-		ph.StopChan <- true
-	}
+	ph.StopChan <- true
 }
