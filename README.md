@@ -50,4 +50,4 @@ go get github.com/inria-muse/service-traceroute
 For an example of how to include a *Service Traceroute* experiment within a third party go program, please refer to the example found at: [https://github.com/inria-muse/service-traceroute/tree/master/example](https://github.com/inria-muse/service-traceroute/tree/master/example)
 
 ### Contacts
-For any question, please contact us at
+For any question, please contact us at [service-traceroute@inria.fr](mailto:service-traceroute@inria.fr)
