@@ -6,7 +6,7 @@ To analyze the produced data, please refer to the following repository: [service
 
 ### Installation from source code
 
-*Service Traceroute* requires a working version of libpcap to be installed in your system. We have tested the code with the default version of libpcap distributed with Ubuntu ... The following instructions follow the steps used for that environment, but should be easily adaptable to any other operating system.
+*Service Traceroute* requires a working version of libpcap to be installed on your system. We have tested the code with the default version of libpcap distributed with Ubuntu 16.04, Fedora 25, and Mac OS High Sierra. The following instructions follow the steps used for Ubuntu, but should be easily adaptable to any other operating system.
 
 To compile, first install eventual missing dependencies:
 
