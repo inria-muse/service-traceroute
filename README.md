@@ -28,7 +28,7 @@ Then run:
 ./build.sh
 ``
 
-This will create the `servicetraceroute-linux-amd64`. Build support for other architectures requires modifying the file `build.sh`
+This will create the `servicetraceroute-linux-amd64` inside a build folder. Build support for other architectures requires modifying the file `build.sh`
 
 For help on how to execute a *Service Traceroute* experiment, run:
 
