@@ -1,4 +1,4 @@
-package tracetcp
+package servicetraceroute
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"github.com/google/gopacket"
 )
 
-//Class for managing the listeners of traceTCPmanager
+//Class for managing the listeners of ServiceTracerouteManager
 //It manages the sniffer for TCP, UDP, ICMP and DNS
 //It is possible to use this class to start custom sniffers
 type Listeners struct {

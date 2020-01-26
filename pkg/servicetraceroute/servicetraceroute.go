@@ -1,4 +1,4 @@
-package tracetcp
+package servicetraceroute
 
 import (
 	"net"
@@ -54,23 +54,23 @@ type CapThread struct {
 //Main structure of the Json output
 //Info - contains the info about the tool
 //Data - contains all the data about the traceroute
-type TraceTCPJson struct {
-	Info TraceTCPInfo
-	Data TraceTCPReport
+type ServiceTracerouteJson struct {
+	Info ServiceTracerouteInfo
+	Data ServiceTracerouteReport
 }
 
 //One part of the Json output
 //Version - the version of the tool
 //Conf - a string that can be associated to a specific traceroute
 //Type - the tool which generated the output
-type TraceTCPInfo struct {
+type ServiceTracerouteInfo struct {
 	Version string
 	Conf    string
 	Type    string
 }
 
 //Contains all information and results about traceroute
-type TraceTCPReport struct {
+type ServiceTracerouteReport struct {
 	TransportProtocol string    //Transport protocol that was used during the traceroute. UDP or TCP
 	TargetIP          string    //The target IP to reach
 	TargetPort        int       //The port of the target IP appartaining at the target application flow
@@ -120,15 +120,15 @@ type ServiceConfiguration struct {
 	Timeout              int    //Timeout (milliseconds)
 	FlowTimeout          int    //Timeout to consider a flow dead (milliseconds)
 	ProbingAlgorithm     string //Spacify the probing algorithm to use. 0 to send 1 packet at the time. 1 to send 1 train of packet (same TTL) at the time. 2 to send all packets without waiting for the reply, only to wait the timeout at the end. If different, 0 will be used as default
-	StartWithEmptyPacket bool   //Flag to specify whether TraceTCP has to start when an empty ack is received. TraceTCP always starts with ACK with payload
+	StartWithEmptyPacket bool   //Flag to specify whether ServiceTraceroute has to start when an empty ack is received. ServiceTraceroute always starts with ACK with payload
 	StopOnBorderRouters  bool   //Flag to specify to stop when Service Traceroute detects a border router
 
 	IPPrefixes []string //IP Prefixes appartaining to the service
 	URLs       []string //URLs appartaining to the service
 }
 
-//Configuration to run TraceTCP
-type TraceTCPConfiguration struct {
+//Configuration to run ServiceTraceroute
+type ServiceTracerouteConfiguration struct {
 	TransportProtocol         string   //Type of protocol to probe. UDP or TCP
 	ConfHash                  string   //Hash to identify a specific traceroute. Given externally by who uses the library
 	Service                   string   //Type of service of the remote IP
@@ -140,26 +140,26 @@ type TraceTCPConfiguration struct {
 	LocalPort                 int      //Port of the local end host
 	Interface                 string   //Interface used to transmit packets
 	Distance                  int      //Max TTL to reach (from 1 to Distance included ?)
-	BorderIPs                 []net.IP //Set of IPs that, if encountered, will stop TraceTCP
+	BorderIPs                 []net.IP //Set of IPs that, if encountered, will stop ServiceTraceroute
 	Iterations                int      //Number of probes for each TTL
 	InterProbeTime            int      //Time to wait between each probe
 	InterIterationTime        int      //Time to wait between each iteration
 	IPVersion                 string   //IP Version
 	Timeout                   int      //Timeout (milliseconds)
-	IDOffset                  uint16   //Offset for the IP ID field in order to allow parallelisation without interference with running TraceTCPs
+	IDOffset                  uint16   //Offset for the IP ID field in order to allow parallelisation without interference with running ServiceTraceroutes
 	ProbingAlgorithm          string   //Spacify the probing algorithm to use. 0 to send 1 packet at the time. 1 to send 1 train of packet (same TTL) at the time. 2 to send all packets without waiting for the reply, only to wait the timeout at the end. If different, 0 will be used as default
-	StartWithEmptyPacket      bool     //Flag to specify whether TraceTCP has to start when an empty ack is received. TraceTCP always starts with ACK with payload
+	StartWithEmptyPacket      bool     //Flag to specify whether ServiceTraceroute has to start when an empty ack is received. ServiceTraceroute always starts with ACK with payload
 	FlowTimeout               int      //Time required to consider a flow dead
 	MaxConsecutiveMissingHops int      //Set how many missing hops (stars *) are required before ending traceroute
 
 	StartTraceroutes bool //Debug, stop immediately the traceroute
 }
 
-//Struct which contains the required objects to run TraceTCP
+//Struct which contains the required objects to run ServiceTraceroute
 //This struct is associated to only one traceroute
-type TraceTCP struct {
+type ServiceTraceroute struct {
 	//The input configuration of Service Traceroute
-	Configuration TraceTCPConfiguration
+	Configuration ServiceTracerouteConfiguration
 	//Receiver and analyser of the input packets
 	Receiver   *Receiver
 	Traceroute *BufferTrace
@@ -178,7 +178,7 @@ type TraceTCP struct {
 }
 
 //Start Service Traceroute with default parameters
-func (tt *TraceTCP) NewDefaultTraceTCP(transportProtocol string, remoteIP net.IP, localIPv4 net.IP, localIPv6 net.IP, remotePort int, iface string, outchan chan string) {
+func (tt *ServiceTraceroute) NewDefaultServiceTraceroute(transportProtocol string, remoteIP net.IP, localIPv4 net.IP, localIPv6 net.IP, remotePort int, iface string, outchan chan string) {
 	tt.Configuration.TransportProtocol = transportProtocol
 	tt.SetLocalIPv4(localIPv4)
 	tt.SetLocalIPv6(localIPv6)
@@ -202,7 +202,7 @@ func (tt *TraceTCP) NewDefaultTraceTCP(transportProtocol string, remoteIP net.IP
 
 //Start Service Traceroute with the given configuration
 //If the given configuration contains the wrong probing algorithm, the Service Traceroute use PacketByPacket as default algorithm
-func (tt *TraceTCP) NewConfiguredTraceTCP(configuration TraceTCPConfiguration) {
+func (tt *ServiceTraceroute) NewConfiguredServiceTraceroute(configuration ServiceTracerouteConfiguration) {
 	tt.Configuration = configuration
 	tt.SniffChannel = make(chan *gopacket.Packet, 1000)
 	tt.Configuration.ProbingAlgorithm = strings.ToLower(tt.Configuration.ProbingAlgorithm)
@@ -213,7 +213,7 @@ func (tt *TraceTCP) NewConfiguredTraceTCP(configuration TraceTCPConfiguration) {
 }
 
 //Start a traceroute towards for a specific application flow given during the initialization of the object
-func (tt *TraceTCP) Run() TraceTCPJson {
+func (tt *ServiceTraceroute) Run() ServiceTracerouteJson {
 	start := time.Now().UnixNano() / int64(time.Millisecond)
 
 	//Start receiver asynchronously
@@ -269,13 +269,13 @@ func (tt *TraceTCP) Run() TraceTCPJson {
 	report.TsStart = start
 	report.TsEnd = end
 
-	reportInfo := TraceTCPInfo{
+	reportInfo := ServiceTracerouteInfo{
 		Version: Version,
-		Type:    "TraceTCP",
+		Type:    "ServiceTraceroute",
 		Conf:    tt.Configuration.ConfHash,
 	}
 
-	completeReport := TraceTCPJson{
+	completeReport := ServiceTracerouteJson{
 		Info: reportInfo,
 		Data: report,
 	}
@@ -286,126 +286,126 @@ func (tt *TraceTCP) Run() TraceTCPJson {
 /*************** Get&Set ***************/
 
 //Set the IPv4 of the machine running Service Traceroute
-func (tt *TraceTCP) SetLocalIPv4(localIPv4 net.IP) {
+func (tt *ServiceTraceroute) SetLocalIPv4(localIPv4 net.IP) {
 	tt.Configuration.LocalIPv4 = localIPv4
 }
 
 //Set the IPv6 of the machine running Service Traceroute
-func (tt *TraceTCP) SetLocalIPv6(localIPv6 net.IP) {
+func (tt *ServiceTraceroute) SetLocalIPv6(localIPv6 net.IP) {
 	tt.Configuration.LocalIPv6 = localIPv6
 }
 
 //Set the IPv4 of the other end host of a specific application flow
-func (tt *TraceTCP) SetRemoteIP(remoteIP net.IP) {
+func (tt *ServiceTraceroute) SetRemoteIP(remoteIP net.IP) {
 	tt.Configuration.RemoteIP = remoteIP
 }
 
 //Set the port of the other end host of a specific application flow
-func (tt *TraceTCP) SetRemotePort(remotePort int) {
+func (tt *ServiceTraceroute) SetRemotePort(remotePort int) {
 	tt.Configuration.RemotePort = remotePort
 }
 
 //Set the port of the the machine running Service Traceroute of a specific application flow
-func (tt *TraceTCP) SetLocalPort(localPort int) {
+func (tt *ServiceTraceroute) SetLocalPort(localPort int) {
 	tt.Configuration.LocalPort = localPort
 }
 
 //Set the interface to use of the machine running Service Traceroute
-func (tt *TraceTCP) SetInterface(iface string) {
+func (tt *ServiceTraceroute) SetInterface(iface string) {
 	tt.Configuration.Interface = iface
 }
 
 //Set the maximum distance to probe
-func (tt *TraceTCP) SetDistance(distance int) {
+func (tt *ServiceTraceroute) SetDistance(distance int) {
 	tt.Configuration.Distance = distance
 }
 
 //Get the maximum distance to probe
-func (tt *TraceTCP) GetDistance() int {
+func (tt *ServiceTraceroute) GetDistance() int {
 	return tt.Configuration.Distance
 }
 
 //Set the border routers for a specific traceroute
-func (tt *TraceTCP) SetBorderIPs(borderIPs []net.IP) {
+func (tt *ServiceTraceroute) SetBorderIPs(borderIPs []net.IP) {
 	tt.Configuration.BorderIPs = borderIPs
 }
 
 //Set the number of probes per TTL
-func (tt *TraceTCP) SetIterations(iterations int) {
+func (tt *ServiceTraceroute) SetIterations(iterations int) {
 	tt.Configuration.Iterations = iterations
 }
 
 //Get the number of probes per TTL
-func (tt *TraceTCP) GetIterations() int {
+func (tt *ServiceTraceroute) GetIterations() int {
 	return tt.Configuration.Iterations
 }
 
 //Set the time to wait between each pair of probe [us]
-func (tt *TraceTCP) SetInterProbeTime(interProbeTime int) {
+func (tt *ServiceTraceroute) SetInterProbeTime(interProbeTime int) {
 	tt.Configuration.InterProbeTime = interProbeTime
 }
 
 //Set the time to wait between each pair of TTL [us]
-func (tt *TraceTCP) SetInterIterationTime(interIterationTime int) {
+func (tt *ServiceTraceroute) SetInterIterationTime(interIterationTime int) {
 	tt.Configuration.InterIterationTime = interIterationTime
 }
 
 //Set the IP version to 4
-func (tt *TraceTCP) SetIPv4() {
+func (tt *ServiceTraceroute) SetIPv4() {
 	tt.Configuration.IPVersion = V4
 }
 
 //Set the IP version to 6 (it is not fully implemented)
-func (tt *TraceTCP) SetIPv6() {
+func (tt *ServiceTraceroute) SetIPv6() {
 	tt.Configuration.IPVersion = V6
 }
 
 //Set the timeout for considering a probe lost [ms]
-func (tt *TraceTCP) SetTimeout(timeout int) {
+func (tt *ServiceTraceroute) SetTimeout(timeout int) {
 	tt.Configuration.Timeout = timeout
 }
 
 //Set the idle time to consider a flow as closed [ms]
-func (tt *TraceTCP) SetFlowTimeout(timeout int) {
+func (tt *ServiceTraceroute) SetFlowTimeout(timeout int) {
 	tt.Configuration.FlowTimeout = timeout
 }
 
 //Set the channel for the standard output
-func (tt *TraceTCP) SetStdOutChan(outchan chan string) {
+func (tt *ServiceTraceroute) SetStdOutChan(outchan chan string) {
 	tt.OutChan = outchan
 }
 
 //Set the channel for the packets to be transmitted
-func (tt *TraceTCP) SetOutPacketsChan(outPacketsChan chan []byte) {
+func (tt *ServiceTraceroute) SetOutPacketsChan(outPacketsChan chan []byte) {
 	tt.OutPacketsChan = outPacketsChan
 }
 
 //Set the IPID offset (to enable multiple traceroutes)
-func (tt *TraceTCP) SetIDOffset(idOffset uint16) {
+func (tt *ServiceTraceroute) SetIDOffset(idOffset uint16) {
 	tt.Configuration.IDOffset = idOffset
 }
 
 //Get the IPID offset
-func (tt *TraceTCP) GetIDOffset() uint16 {
+func (tt *ServiceTraceroute) GetIDOffset() uint16 {
 	return tt.Configuration.IDOffset
 }
 
 //Set the probing algorithm
-func (tt *TraceTCP) SetProbingAlgorithm(probingAlgorithm string) {
+func (tt *ServiceTraceroute) SetProbingAlgorithm(probingAlgorithm string) {
 	tt.Configuration.ProbingAlgorithm = probingAlgorithm
 }
 
 //Get the probing algorithm
-func (tt *TraceTCP) GetProbingAlgorithm() string {
+func (tt *ServiceTraceroute) GetProbingAlgorithm() string {
 	return tt.Configuration.ProbingAlgorithm
 }
 
 //Set the service associated to this traceroute
-func (tt *TraceTCP) SetService(service string) {
+func (tt *ServiceTraceroute) SetService(service string) {
 	tt.Configuration.Service = service
 }
 
 //Set whether the traceroute should start only when data is exchanged (=packets with payload) or also with empty packets
-func (tt *TraceTCP) SetStartWithEmptyPacket(start bool) {
+func (tt *ServiceTraceroute) SetStartWithEmptyPacket(start bool) {
 	tt.Configuration.StartWithEmptyPacket = start
 }

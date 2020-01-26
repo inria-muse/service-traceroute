@@ -1,4 +1,4 @@
-package tracetcp
+package servicetraceroute
 
 import (
 	"bufio"
@@ -28,8 +28,8 @@ type OffsetInterval struct {
 	end   int //End of the interval (not included)
 }
 
-//Configuration of TraceTCP Manager
-type TraceTCPManagerConfiguration struct {
+//Configuration of ServiceTraceroute Manager
+type ServiceTracerouteManagerConfiguration struct {
 	Interface string                 //Interface used to listen/send packets
 	BorderIPs []net.IP               //Router where traceTCP will stop (if flag is set to True)
 	Services  []ServiceConfiguration //Services to trace
@@ -52,36 +52,36 @@ type TraceTCPManagerConfiguration struct {
 	StartAnalysis    bool //Specify if ServiceTraceroute can start new traceroutes or not
 }
 
-//Log of TraceTCP which will be stored in the map
-type TraceTCPLog struct {
-	Report        TraceTCPJson          //Final report, if traceTCP completed
-	Configuration TraceTCPConfiguration //Configuration used for TraceTCP
+//Log of ServiceTraceroute which will be stored in the map
+type ServiceTracerouteLog struct {
+	Report        ServiceTracerouteJson          //Final report, if traceTCP completed
+	Configuration ServiceTracerouteConfiguration //Configuration used for ServiceTraceroute
 
 	IsRunning  bool  //Flag to specify if it is running or not
-	StartedAt  int64 //When TraceTCP started
-	FinishedAt int64 //When TraceTCP finished (if not, then it is negative)
+	StartedAt  int64 //When ServiceTraceroute started
+	FinishedAt int64 //When ServiceTraceroute finished (if not, then it is negative)
 }
 
-//Main struct for the manager of multiple TraceTCP
-type TraceTCPManager struct {
-	RunningTraceTCPs map[string]*TraceTCP //Contains all running experiments
-	AvailableOffsets []OffsetInterval     //ID intervals available for new TraceTCPs
+//Main struct for the manager of multiple ServiceTraceroute
+type ServiceTracerouteManager struct {
+	RunningServiceTraceroutes map[string]*ServiceTraceroute //Contains all running experiments
+	AvailableOffsets          []OffsetInterval              //ID intervals available for new ServiceTraceroutes
 
 	//Configuration
-	Configuration TraceTCPManagerConfiguration //Configuration of TraceTCP
+	Configuration ServiceTracerouteManagerConfiguration //Configuration of ServiceTraceroute
 
 	//Input Channels (captured packets)
-	TCPChan  chan gopacket.Packet //Input channel for TCP packets to be forwarded to TraceTCP
-	UDPChan  chan gopacket.Packet //Input channel for UDP packets to be forwarded to TraceTCP
-	ICMPChan chan gopacket.Packet //Input channel for ICMP packets to be forwarded to TraceTCP
-	DNSChan  chan gopacket.Packet //Input channel for DNS packets to be forwarded to TraceTCP
+	TCPChan  chan gopacket.Packet //Input channel for TCP packets to be forwarded to ServiceTraceroute
+	UDPChan  chan gopacket.Packet //Input channel for UDP packets to be forwarded to ServiceTraceroute
+	ICMPChan chan gopacket.Packet //Input channel for ICMP packets to be forwarded to ServiceTraceroute
+	DNSChan  chan gopacket.Packet //Input channel for DNS packets to be forwarded to ServiceTraceroute
 
 	//Output Channels
-	OutPacketChan chan []byte       //packets to be transmitted
-	OutChan       chan string       //data to be printed/stored
-	OutResultChan chan TraceTCPJson //results to show
+	OutPacketChan chan []byte                //packets to be transmitted
+	OutChan       chan string                //data to be printed/stored
+	OutResultChan chan ServiceTracerouteJson //results to show
 
-	//Channel to stop TraceTCPManager
+	//Channel to stop ServiceTracerouteManager
 	StopChan chan bool //To stop the manager
 
 	//DNS resolver
@@ -99,20 +99,20 @@ type TraceTCPManager struct {
 
 	//Mutex
 	offsetMutex        *sync.Mutex //Mutex for offset array
-	runningTracesMutex *sync.Mutex //Mutex for running TraceTCP array
+	runningTracesMutex *sync.Mutex //Mutex for running ServiceTraceroute array
 	logsMapMutex       *sync.Mutex //Mutex for map with logs
 
 	//Results
-	LogsMap    map[string]TraceTCPLog //Contains the running experiments and the results of those finished in the last 3 minutes
-	LogsMapTTL int64                  //time to live for data in logs map when the experiment is finished
+	LogsMap    map[string]ServiceTracerouteLog //Contains the running experiments and the results of those finished in the last 3 minutes
+	LogsMapTTL int64                           //time to live for data in logs map when the experiment is finished
 }
 
-//NewTraceTCPManager initialize the manager of multiple TraceTCP experiments
+//NewServiceTracerouteManager initialize the manager of multiple ServiceTraceroute experiments
 //iface string: is the name of the interface. It must be set
 //ipVersion string: is the version of the IP layer ('4' or '6'). Use the const V4 or V6
-//borderRouters []net.IP: are the IPs of the border routers, where TraceTCP will stop. It can be nil if not used
+//borderRouters []net.IP: are the IPs of the border routers, where ServiceTraceroute will stop. It can be nil if not used
 //return error: nil if no error happened during the initialization
-func (tm *TraceTCPManager) NewTraceTCPManager(iface string, ipVersion string, parallelProbesPerDestination bool, parallelProbesPerDstPort bool, startSniffer bool, startSender bool, startDNSResolver bool, startTraceroutes bool, interTraceTime int, maxConsecutiveMissingHops int, borderRouters []net.IP, outChan chan string, outResultsChan chan TraceTCPJson) error {
+func (tm *ServiceTracerouteManager) NewServiceTracerouteManager(iface string, ipVersion string, parallelProbesPerDestination bool, parallelProbesPerDstPort bool, startSniffer bool, startSender bool, startDNSResolver bool, startTraceroutes bool, interTraceTime int, maxConsecutiveMissingHops int, borderRouters []net.IP, outChan chan string, outResultsChan chan ServiceTracerouteJson) error {
 	//Initial configuration
 	tm.Configuration.Sniffer = startSniffer
 	tm.Configuration.DNSResolver = startDNSResolver
@@ -175,9 +175,9 @@ func (tm *TraceTCPManager) NewTraceTCPManager(iface string, ipVersion string, pa
 	tm.runningTracesMutex = &sync.Mutex{}
 	tm.logsMapMutex = &sync.Mutex{}
 
-	tm.RunningTraceTCPs = make(map[string]*TraceTCP)
+	tm.RunningServiceTraceroutes = make(map[string]*ServiceTraceroute)
 	tm.AvailableOffsets = make([]OffsetInterval, 1)
-	tm.LogsMap = make(map[string]TraceTCPLog)
+	tm.LogsMap = make(map[string]ServiceTracerouteLog)
 	tm.LogsMapTTL = int64(interTraceTime)
 
 	//Add interval long all possible IDs
@@ -200,7 +200,7 @@ func (tm *TraceTCPManager) NewTraceTCPManager(iface string, ipVersion string, pa
 }
 
 //Convert the application flows 5-tuple into a key for identifying the traceroutes
-func (tm *TraceTCPManager) GetMapKey(protocol string, remoteIp net.IP, remotePort int, localPort int) string {
+func (tm *ServiceTracerouteManager) GetMapKey(protocol string, remoteIp net.IP, remotePort int, localPort int) string {
 	if !tm.Configuration.DestinationMultipleProbing {
 		return fmt.Sprintf("%s-%s", protocol, remoteIp.String())
 	}
@@ -211,8 +211,8 @@ func (tm *TraceTCPManager) GetMapKey(protocol string, remoteIp net.IP, remotePor
 }
 
 //Start the multiplexer for input packets. It forwards the input packets to the correct traceroute
-func (tm *TraceTCPManager) Run() {
-	//Multiplexing of data between the running TraceTCPs and external process
+func (tm *ServiceTracerouteManager) Run() {
+	//Multiplexing of data between the running ServiceTraceroutes and external process
 	for {
 		select {
 		case <-tm.StopChan:
@@ -238,17 +238,17 @@ func (tm *TraceTCPManager) Run() {
 				continue
 			}
 
-			tracetcp := tm.GetTracerouteFromFlowID(ip1, port1, ip2, port2)
+			st := tm.GetTracerouteFromFlowID(ip1, port1, ip2, port2)
 
 			//If no traceroute have the target flow id
 			//Assign it to one with same destination and port
-			if tracetcp == nil {
-				tracetcp = tm.AssignFlowIDToTraceroute(ip1, port1, ip2, port2)
+			if st == nil {
+				st = tm.AssignFlowIDToTraceroute(ip1, port1, ip2, port2)
 			}
 
 			//Redirect packet
-			if tracetcp != nil {
-				tracetcp.SniffChannel <- &tcpPacket
+			if st != nil {
+				st.SniffChannel <- &tcpPacket
 				continue
 			}
 
@@ -292,17 +292,17 @@ func (tm *TraceTCPManager) Run() {
 				continue
 			}
 
-			tracetcp := tm.GetTracerouteFromFlowID(ip1, port1, ip2, port2)
+			st := tm.GetTracerouteFromFlowID(ip1, port1, ip2, port2)
 
 			//If no traceroute have the target flow id
 			//Assign it to one with same destination and port
-			if tracetcp == nil {
-				tracetcp = tm.AssignFlowIDToTraceroute(ip1, port1, ip2, port2)
+			if st == nil {
+				st = tm.AssignFlowIDToTraceroute(ip1, port1, ip2, port2)
 			}
 
 			//Redirect packet
-			if tracetcp != nil {
-				tracetcp.SniffChannel <- &udpPacket
+			if st != nil {
+				st.SniffChannel <- &udpPacket
 				continue
 			}
 
@@ -348,25 +348,25 @@ func (tm *TraceTCPManager) Run() {
 				continue
 			}
 
-			tracetcp := tm.GetTracerouteFromFlowID(dstIp, dstPort, srcIp, srcPort)
+			st := tm.GetTracerouteFromFlowID(dstIp, dstPort, srcIp, srcPort)
 
-			if tracetcp == nil || tracetcp.Configuration.RemoteIP.String() != dstIp.String() {
+			if st == nil || st.Configuration.RemoteIP.String() != dstIp.String() {
 				//ERROR: skip packet
 				continue
 			}
 
-			tracetcp.SniffChannel <- &icmpPacket
+			st.SniffChannel <- &icmpPacket
 		}
 	}
 }
 
 //Stop the multiplexer (Run() function)
-func (tm *TraceTCPManager) Stop() {
+func (tm *ServiceTracerouteManager) Stop() {
 	tm.StopChan <- true
 }
 
 //Start a traceceroute to a specific service if the given service is in the list of services to be analyzed
-func (tm *TraceTCPManager) StartServiceTraceroute(transportProtocol string, services []string, ipresolutions []string, dstIp net.IP, dstPort int, localPort int) {
+func (tm *ServiceTracerouteManager) StartServiceTraceroute(transportProtocol string, services []string, ipresolutions []string, dstIp net.IP, dstPort int, localPort int) {
 	//Check if there is one service matching the new application flow
 	for _, confService := range tm.Configuration.Services {
 		for index, service := range services {
@@ -406,7 +406,7 @@ func (tm *TraceTCPManager) StartServiceTraceroute(transportProtocol string, serv
 // - There aren't any other traceroute for the same application flow
 // - The results are expired in the log (depends by the time)
 // - The IP versions are correct
-func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP net.IP, remotePort int, localPort int, service string, ipresolution string, maxDistance int, numberIterations int, timeout int, flowTimeout int, interProbeTime int, interIterationTime int, probingAlgorithm string, stopWithBorderRouters bool, startWithEmptyPacket bool, maxConsecutiveMissingHops int) error {
+func (tm *ServiceTracerouteManager) StartTraceroute(transportProtocol string, remoteIP net.IP, remotePort int, localPort int, service string, ipresolution string, maxDistance int, numberIterations int, timeout int, flowTimeout int, interProbeTime int, interIterationTime int, probingAlgorithm string, stopWithBorderRouters bool, startWithEmptyPacket bool, maxConsecutiveMissingHops int) error {
 	tm.ClearLogsMap()
 
 	//Check if the flag to start new traceroutes is True
@@ -415,13 +415,13 @@ func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP ne
 	}
 
 	//check that there aren't any other traceroutes for the same application flow
-	if tm.CheckExistanceTraceTCPExperiment(transportProtocol, remoteIP, remotePort, localPort) {
-		return errors.New("TraceTCP to " + remoteIP.String() + " is already running")
+	if tm.CheckExistanceServiceTracerouteExperiment(transportProtocol, remoteIP, remotePort, localPort) {
+		return errors.New("ServiceTraceroute to " + remoteIP.String() + " is already running")
 	}
 
 	//check if the traceroute is in the log
 	if _, err := tm.GetLog(transportProtocol, remoteIP.String(), remotePort, localPort); err == nil {
-		return errors.New(fmt.Sprintf("TraceTCP to %s finished within %d seconds", remoteIP.String(), tm.LogsMapTTL))
+		return errors.New(fmt.Sprintf("ServiceTraceroute to %s finished within %d seconds", remoteIP.String(), tm.LogsMapTTL))
 	}
 
 	//Check that there is enough space
@@ -435,13 +435,13 @@ func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP ne
 
 	borderIPs := tm.Configuration.BorderIPs
 
-	//If the TraceTCP must not stop with border routers, just set the array to nil
+	//If the ServiceTraceroute must not stop with border routers, just set the array to nil
 	if !stopWithBorderRouters {
 		borderIPs = nil
 	}
 
 	ipversion := V6
-	if remoteIP.To4 != nil {
+	if remoteIP.To4() != nil {
 		ipversion = V4
 	}
 
@@ -452,7 +452,7 @@ func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP ne
 	}
 
 	//Generate wanted configuration
-	config := TraceTCPConfiguration{
+	config := ServiceTracerouteConfiguration{
 		TransportProtocol:         transportProtocol,
 		IDOffset:                  uint16(interval.start),
 		BorderIPs:                 borderIPs,
@@ -477,37 +477,37 @@ func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP ne
 		StartTraceroutes:          tm.Configuration.StartTraceroutes,
 	}
 
-	log := TraceTCPLog{
+	log := ServiceTracerouteLog{
 		Configuration: config,
 		IsRunning:     true,
 		FinishedAt:    -1,
 		StartedAt:     time.Now().UnixNano(),
 	}
 
-	//Start  TraceTCP on a new thread
-	tracetcp := new(TraceTCP)
-	tracetcp.NewConfiguredTraceTCP(config)
+	//Start  ServiceTraceroute on a new thread
+	st := new(ServiceTraceroute)
+	st.NewConfiguredServiceTraceroute(config)
 
 	//Set output channel
-	tracetcp.SetOutPacketsChan(tm.OutPacketChan)
+	st.SetOutPacketsChan(tm.OutPacketChan)
 
 	//Set 'stdout'
-	tracetcp.SetStdOutChan(tm.OutChan)
+	st.SetStdOutChan(tm.OutChan)
 
-	//Check if there are no tracetcp to the same destination
-	//If no tracetcp, then store tracetcp as running experiment
-	exists := tm.CheckAndAddTraceTCPExperiment(tracetcp)
+	//Check if there are no servicetraceroute to the same destination
+	//If no servicetraceroute, then store servicetraceroute as running experiment
+	exists := tm.CheckAndAddServiceTracerouteExperiment(st)
 
 	if exists {
 		//Free the used interval
 		tm.FreeInterval(interval)
-		return errors.New("TraceTCP to " + remoteIP.String() + " is already running")
+		return errors.New("ServiceTraceroute to " + remoteIP.String() + " is already running")
 	}
 
 	tm.UpdateLogsMap(log)
 
-	//Run TraceTCP
-	report := tracetcp.Run()
+	//Run ServiceTraceroute
+	report := st.Run()
 
 	tm.OutResultChan <- report
 
@@ -517,8 +517,8 @@ func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP ne
 
 	tm.UpdateLogsMap(log)
 
-	//Finished, remove tracetcp from running experiments
-	tm.RemoveTraceTCPExperiment(tracetcp)
+	//Finished, remove st from running experiments
+	tm.RemoveServiceTracerouteExperiment(st)
 
 	//Free the used interval
 	tm.FreeInterval(interval)
@@ -530,7 +530,7 @@ func (tm *TraceTCPManager) StartTraceroute(transportProtocol string, remoteIP ne
 
 //Find the interval which fits for the given interval size
 //Remove spot from the available spots in AvailableOffsets
-func (tm *TraceTCPManager) UseInterval(size int) (OffsetInterval, error) {
+func (tm *ServiceTracerouteManager) UseInterval(size int) (OffsetInterval, error) {
 	tm.offsetMutex.Lock()
 
 	index := -1
@@ -565,7 +565,7 @@ func (tm *TraceTCPManager) UseInterval(size int) (OffsetInterval, error) {
 }
 
 //Free an used interval and put it into AvailableOffsets
-func (tm *TraceTCPManager) FreeInterval(offsetInterval OffsetInterval) {
+func (tm *ServiceTracerouteManager) FreeInterval(offsetInterval OffsetInterval) {
 	tm.offsetMutex.Lock()
 
 	for _, interval := range tm.AvailableOffsets {
@@ -586,13 +586,13 @@ func (tm *TraceTCPManager) FreeInterval(offsetInterval OffsetInterval) {
 //Check if there is an already running traceroute
 //However, if it says that there are no traceTCP to the remoteIP, it may happen  that
 //a new experiment may be added immediately after it.
-func (tm *TraceTCPManager) CheckExistanceTraceTCPExperiment(protocol string, remoteIp net.IP, remotePort int, localPort int) bool {
+func (tm *ServiceTracerouteManager) CheckExistanceServiceTracerouteExperiment(protocol string, remoteIp net.IP, remotePort int, localPort int) bool {
 	exists := false
 
 	key := tm.GetMapKey(protocol, remoteIp, remotePort, localPort)
 	tm.runningTracesMutex.Lock()
 
-	if _, ok := tm.RunningTraceTCPs[key]; ok {
+	if _, ok := tm.RunningServiceTraceroutes[key]; ok {
 		exists = true
 	}
 
@@ -602,19 +602,19 @@ func (tm *TraceTCPManager) CheckExistanceTraceTCPExperiment(protocol string, rem
 }
 
 //Check if there is an already running experiments
-//If not, it adds the given TraceTCP into the list of running experiments
-func (tm *TraceTCPManager) CheckAndAddTraceTCPExperiment(tracetcp *TraceTCP) bool {
+//If not, it adds the given ServiceTraceroute into the list of running experiments
+func (tm *ServiceTracerouteManager) CheckAndAddServiceTracerouteExperiment(st *ServiceTraceroute) bool {
 	exists := false
 
-	key := tm.GetMapKey(tracetcp.Configuration.TransportProtocol, tracetcp.Configuration.RemoteIP, tracetcp.Configuration.RemotePort, tracetcp.Configuration.LocalPort)
+	key := tm.GetMapKey(st.Configuration.TransportProtocol, st.Configuration.RemoteIP, st.Configuration.RemotePort, st.Configuration.LocalPort)
 	tm.runningTracesMutex.Lock()
 
-	if _, ok := tm.RunningTraceTCPs[key]; ok {
+	if _, ok := tm.RunningServiceTraceroutes[key]; ok {
 		exists = true
 	}
 
 	if !exists {
-		tm.RunningTraceTCPs[key] = tracetcp
+		tm.RunningServiceTraceroutes[key] = st
 	}
 
 	tm.runningTracesMutex.Unlock()
@@ -622,96 +622,96 @@ func (tm *TraceTCPManager) CheckAndAddTraceTCPExperiment(tracetcp *TraceTCP) boo
 }
 
 //Change the ID (key) identifying a traceroute
-func (tm *TraceTCPManager) SwitchTracerouteKeys(key string, oldkey string) {
-	if _, ok := tm.RunningTraceTCPs[oldkey]; ok {
-		tracetcp := tm.RunningTraceTCPs[oldkey]
-		delete(tm.RunningTraceTCPs, oldkey)
-		tm.RunningTraceTCPs[key] = tracetcp
+func (tm *ServiceTracerouteManager) SwitchTracerouteKeys(key string, oldkey string) {
+	if _, ok := tm.RunningServiceTraceroutes[oldkey]; ok {
+		st := tm.RunningServiceTraceroutes[oldkey]
+		delete(tm.RunningServiceTraceroutes, oldkey)
+		tm.RunningServiceTraceroutes[key] = st
 	}
 }
 
-//Remove the input tracetcp from the array of running experiments
-func (tm *TraceTCPManager) RemoveTraceTCPExperiment(tracetcp *TraceTCP) {
+//Remove the input st from the array of running experiments
+func (tm *ServiceTracerouteManager) RemoveServiceTracerouteExperiment(st *ServiceTraceroute) {
 	tm.runningTracesMutex.Lock()
 
-	key := tm.GetMapKey(tracetcp.Configuration.TransportProtocol, tracetcp.Configuration.RemoteIP, tracetcp.Configuration.RemotePort, tracetcp.Configuration.LocalPort)
+	key := tm.GetMapKey(st.Configuration.TransportProtocol, st.Configuration.RemoteIP, st.Configuration.RemotePort, st.Configuration.LocalPort)
 
-	if _, ok := tm.RunningTraceTCPs[key]; ok {
-		delete(tm.RunningTraceTCPs, key)
+	if _, ok := tm.RunningServiceTraceroutes[key]; ok {
+		delete(tm.RunningServiceTraceroutes, key)
 	}
 
 	tm.runningTracesMutex.Unlock()
 }
 
-//Return TraceTCP which contains the input IP ID
-func (tm *TraceTCPManager) GetTracerouteFromIPID(id uint16) *TraceTCP {
+//Return ServiceTraceroute which contains the input IP ID
+func (tm *ServiceTracerouteManager) GetTracerouteFromIPID(id uint16) *ServiceTraceroute {
 	tm.runningTracesMutex.Lock()
 
-	var tracetcp *TraceTCP
+	var st *ServiceTraceroute
 
-	for _, runningTraceTCP := range tm.RunningTraceTCPs {
-		size := uint16(runningTraceTCP.GetDistance() * runningTraceTCP.GetIterations())
+	for _, runningServiceTraceroute := range tm.RunningServiceTraceroutes {
+		size := uint16(runningServiceTraceroute.GetDistance() * runningServiceTraceroute.GetIterations())
 
-		if id >= runningTraceTCP.GetIDOffset() && id < (runningTraceTCP.GetIDOffset()+size) {
-			tracetcp = runningTraceTCP
+		if id >= runningServiceTraceroute.GetIDOffset() && id < (runningServiceTraceroute.GetIDOffset()+size) {
+			st = runningServiceTraceroute
 			break
 		}
 	}
 
 	tm.runningTracesMutex.Unlock()
 
-	return tracetcp
+	return st
 }
 
-//GetTraceTCPExperimentFromFlowID return the TraceTCP where remoteIP and remotePort matches one of 2 pairs given as input (where one is local end host and the other is the remote one)
-func (tm *TraceTCPManager) GetTracerouteFromFlowID(ip1 net.IP, port1 int, ip2 net.IP, port2 int) *TraceTCP {
+//GetServiceTracerouteExperimentFromFlowID return the ServiceTraceroute where remoteIP and remotePort matches one of 2 pairs given as input (where one is local end host and the other is the remote one)
+func (tm *ServiceTracerouteManager) GetTracerouteFromFlowID(ip1 net.IP, port1 int, ip2 net.IP, port2 int) *ServiceTraceroute {
 	tm.runningTracesMutex.Lock()
 
-	var tracetcp *TraceTCP
-	tracetcp = nil
+	var st *ServiceTraceroute
+	st = nil
 
-	for _, runningTraceTCP := range tm.RunningTraceTCPs {
+	for _, runningServiceTraceroute := range tm.RunningServiceTraceroutes {
 		//Check if flows IDs corresponds (checking both directions)
-		if runningTraceTCP.Configuration.RemoteIP.String() == ip1.String() && runningTraceTCP.Configuration.RemotePort == port1 &&
-			runningTraceTCP.Configuration.LocalIPv4.String() == ip2.String() && runningTraceTCP.Configuration.LocalPort == port2 {
-			tracetcp = runningTraceTCP
+		if runningServiceTraceroute.Configuration.RemoteIP.String() == ip1.String() && runningServiceTraceroute.Configuration.RemotePort == port1 &&
+			runningServiceTraceroute.Configuration.LocalIPv4.String() == ip2.String() && runningServiceTraceroute.Configuration.LocalPort == port2 {
+			st = runningServiceTraceroute
 			break
-		} else if runningTraceTCP.Configuration.RemoteIP.String() == ip2.String() && runningTraceTCP.Configuration.RemotePort == port2 &&
-			runningTraceTCP.Configuration.LocalIPv4.String() == ip1.String() && runningTraceTCP.Configuration.LocalPort == port1 {
-			tracetcp = runningTraceTCP
+		} else if runningServiceTraceroute.Configuration.RemoteIP.String() == ip2.String() && runningServiceTraceroute.Configuration.RemotePort == port2 &&
+			runningServiceTraceroute.Configuration.LocalIPv4.String() == ip1.String() && runningServiceTraceroute.Configuration.LocalPort == port1 {
+			st = runningServiceTraceroute
 			break
 		}
 	}
 
 	tm.runningTracesMutex.Unlock()
 
-	return tracetcp
+	return st
 }
 
 //At the beginning a Traceroute may not have the complete application flow ID
 //This function fixes the flow ID of the traceroute when it is incomplete
-func (tm *TraceTCPManager) AssignFlowIDToTraceroute(ip1 net.IP, port1 int, ip2 net.IP, port2 int) *TraceTCP {
+func (tm *ServiceTracerouteManager) AssignFlowIDToTraceroute(ip1 net.IP, port1 int, ip2 net.IP, port2 int) *ServiceTraceroute {
 	tm.runningTracesMutex.Lock()
 
-	var tracetcp *TraceTCP
-	tracetcp = nil
+	var st *ServiceTraceroute
+	st = nil
 	modified := false
 
-	for _, runningTraceTCP := range tm.RunningTraceTCPs {
-		oldkey := tm.GetMapKey(runningTraceTCP.Configuration.TransportProtocol, runningTraceTCP.Configuration.RemoteIP, runningTraceTCP.Configuration.RemotePort, runningTraceTCP.Configuration.LocalPort)
+	for _, runningServiceTraceroute := range tm.RunningServiceTraceroutes {
+		oldkey := tm.GetMapKey(runningServiceTraceroute.Configuration.TransportProtocol, runningServiceTraceroute.Configuration.RemoteIP, runningServiceTraceroute.Configuration.RemotePort, runningServiceTraceroute.Configuration.LocalPort)
 		//Check if flows IDs corresponds (checking both directions)
-		if runningTraceTCP.Configuration.RemoteIP.String() == ip1.String() && runningTraceTCP.Configuration.RemotePort == port1 && (runningTraceTCP.Configuration.LocalPort == 0 || port2 == runningTraceTCP.Configuration.LocalPort) {
-			runningTraceTCP.Configuration.LocalIPv4 = ip2
-			runningTraceTCP.Configuration.LocalPort = port2
+		if runningServiceTraceroute.Configuration.RemoteIP.String() == ip1.String() && runningServiceTraceroute.Configuration.RemotePort == port1 && (runningServiceTraceroute.Configuration.LocalPort == 0 || port2 == runningServiceTraceroute.Configuration.LocalPort) {
+			runningServiceTraceroute.Configuration.LocalIPv4 = ip2
+			runningServiceTraceroute.Configuration.LocalPort = port2
 			modified = true
-			tracetcp = runningTraceTCP
-		} else if runningTraceTCP.Configuration.RemoteIP.String() == ip2.String() && runningTraceTCP.Configuration.RemotePort == port2 && (runningTraceTCP.Configuration.LocalPort == 0 || port1 == runningTraceTCP.Configuration.LocalPort) {
-			runningTraceTCP.Configuration.LocalIPv4 = ip1
-			runningTraceTCP.Configuration.LocalPort = port1
+			st = runningServiceTraceroute
+		} else if runningServiceTraceroute.Configuration.RemoteIP.String() == ip2.String() && runningServiceTraceroute.Configuration.RemotePort == port2 && (runningServiceTraceroute.Configuration.LocalPort == 0 || port1 == runningServiceTraceroute.Configuration.LocalPort) {
+			runningServiceTraceroute.Configuration.LocalIPv4 = ip1
+			runningServiceTraceroute.Configuration.LocalPort = port1
 			modified = true
-			tracetcp = runningTraceTCP
+			st = runningServiceTraceroute
 		}
-		key := tm.GetMapKey(runningTraceTCP.Configuration.TransportProtocol, runningTraceTCP.Configuration.RemoteIP, runningTraceTCP.Configuration.RemotePort, runningTraceTCP.Configuration.LocalPort)
+		key := tm.GetMapKey(runningServiceTraceroute.Configuration.TransportProtocol, runningServiceTraceroute.Configuration.RemoteIP, runningServiceTraceroute.Configuration.RemotePort, runningServiceTraceroute.Configuration.LocalPort)
 
 		if modified {
 			tm.logsMapMutex.Lock()
@@ -724,14 +724,14 @@ func (tm *TraceTCPManager) AssignFlowIDToTraceroute(ip1 net.IP, port1 int, ip2 n
 
 	tm.runningTracesMutex.Unlock()
 
-	return tracetcp
+	return st
 }
 
-//Return the number of running TraceTCP
-func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
+//Return the number of running ServiceTraceroute
+func (tm *ServiceTracerouteManager) GetNumberOfRunningServiceTraceroute() int {
 	tm.runningTracesMutex.Lock()
 
-	numberRunningExps := len(tm.RunningTraceTCPs)
+	numberRunningExps := len(tm.RunningServiceTraceroutes)
 
 	tm.runningTracesMutex.Unlock()
 
@@ -739,8 +739,8 @@ func (tm *TraceTCPManager) GetNumberOfRunningTraceTCP() int {
 }
 
 //Return the log of a traceroute for a specific application flow
-func (tm *TraceTCPManager) GetLog(protocol string, remoteIp string, remotePort int, localPort int) (TraceTCPLog, error) {
-	var log TraceTCPLog = TraceTCPLog{}
+func (tm *ServiceTracerouteManager) GetLog(protocol string, remoteIp string, remotePort int, localPort int) (ServiceTracerouteLog, error) {
+	var log ServiceTracerouteLog = ServiceTracerouteLog{}
 	var err error = nil
 
 	tm.ClearLogsMap()
@@ -761,7 +761,7 @@ func (tm *TraceTCPManager) GetLog(protocol string, remoteIp string, remotePort i
 }
 
 //Remove old logs and add/update the input log
-func (tm *TraceTCPManager) UpdateLogsMap(log TraceTCPLog) error {
+func (tm *ServiceTracerouteManager) UpdateLogsMap(log ServiceTracerouteLog) error {
 	tm.ClearLogsMap()
 
 	var err error = nil
@@ -775,7 +775,7 @@ func (tm *TraceTCPManager) UpdateLogsMap(log TraceTCPLog) error {
 }
 
 //Remove a given log from the map
-func (tm *TraceTCPManager) RemoveLogsMap(log TraceTCPLog) error {
+func (tm *ServiceTracerouteManager) RemoveLogsMap(log ServiceTracerouteLog) error {
 	var err error = nil
 
 	key := tm.GetMapKey(log.Configuration.TransportProtocol, log.Configuration.RemoteIP, log.Configuration.RemotePort, log.Configuration.LocalPort)
@@ -789,7 +789,7 @@ func (tm *TraceTCPManager) RemoveLogsMap(log TraceTCPLog) error {
 }
 
 //Change the key corresponding to a specific log
-func (tm *TraceTCPManager) SwitchLogsKey(key string, oldkey string) error {
+func (tm *ServiceTracerouteManager) SwitchLogsKey(key string, oldkey string) error {
 	var err error = nil
 
 	if _, ok := tm.LogsMap[oldkey]; ok {
@@ -804,7 +804,7 @@ func (tm *TraceTCPManager) SwitchLogsKey(key string, oldkey string) error {
 }
 
 //Remove all expired logs
-func (tm *TraceTCPManager) ClearLogsMap() {
+func (tm *ServiceTracerouteManager) ClearLogsMap() {
 	tm.logsMapMutex.Lock()
 
 	for _, v := range tm.LogsMap {
@@ -827,7 +827,7 @@ func (tm *TraceTCPManager) ClearLogsMap() {
 //###### PACKET PARSING  #######
 
 //Get the Flow ID from a TCP packet
-func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
+func (tm *ServiceTracerouteManager) GetFlowIDFromTCPPacket(tcpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
 	var ip1 net.IP
 	var ip2 net.IP
 	var port1 int
@@ -855,7 +855,7 @@ func (tm *TraceTCPManager) GetFlowIDFromTCPPacket(tcpPacket *gopacket.Packet) (n
 }
 
 //Get the Flow Id from an UDP packet
-func (tm *TraceTCPManager) GetFlowIDFromUDPPacket(udpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
+func (tm *ServiceTracerouteManager) GetFlowIDFromUDPPacket(udpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
 	var ip1 net.IP
 	var ip2 net.IP
 	var port1 int
@@ -883,7 +883,7 @@ func (tm *TraceTCPManager) GetFlowIDFromUDPPacket(udpPacket *gopacket.Packet) (n
 }
 
 //Return the IPID contained in the ICMP payload
-func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket *gopacket.Packet) (uint16, error) {
+func (tm *ServiceTracerouteManager) GetIPIDFromICMPPacket(icmpPacket *gopacket.Packet) (uint16, error) {
 	if icmp4Layer := (*icmpPacket).Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 
@@ -900,7 +900,7 @@ func (tm *TraceTCPManager) GetIPIDFromICMPPacket(icmpPacket *gopacket.Packet) (u
 }
 
 //Return the final destination of traceTCP probe from the payload of ICMP
-func (tm *TraceTCPManager) GetFlowIDFromICMPPacket(icmpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
+func (tm *ServiceTracerouteManager) GetFlowIDFromICMPPacket(icmpPacket *gopacket.Packet) (net.IP, int, net.IP, int, error) {
 	if icmp4Layer := (*icmpPacket).Layer(layers.LayerTypeICMPv4); icmp4Layer != nil {
 		icmp, _ := icmp4Layer.(*layers.ICMPv4)
 
@@ -925,7 +925,7 @@ func (tm *TraceTCPManager) GetFlowIDFromICMPPacket(icmpPacket *gopacket.Packet) 
 }
 
 //Decode the ICMP payload to return the IP addresses, the protocol and header length of the dropped packet
-func (tm *TraceTCPManager) DecodeICMPIP(payload []byte) (net.IP, net.IP, string, int, error) {
+func (tm *ServiceTracerouteManager) DecodeICMPIP(payload []byte) (net.IP, net.IP, string, int, error) {
 	dstIp := make(net.IP, 4)
 	srcIP := make(net.IP, 4)
 
@@ -952,7 +952,7 @@ func (tm *TraceTCPManager) DecodeICMPIP(payload []byte) (net.IP, net.IP, string,
 }
 
 //Return source and destination port contained in the ICMP payload (TCP packet)
-func (tm *TraceTCPManager) DecodeICMPTCP(payload []byte, HL int) (int, int, error) {
+func (tm *ServiceTracerouteManager) DecodeICMPTCP(payload []byte, HL int) (int, int, error) {
 
 	srcPort := binary.BigEndian.Uint16(payload[HL : HL+2])
 	dstPort := binary.BigEndian.Uint16(payload[HL+2 : HL+4])
@@ -961,7 +961,7 @@ func (tm *TraceTCPManager) DecodeICMPTCP(payload []byte, HL int) (int, int, erro
 }
 
 //Return source and destination port contained in the ICMP payload (UDP packet)
-func (tm *TraceTCPManager) DecodeICMPUDP(payload []byte, HL int) (int, int, error) {
+func (tm *ServiceTracerouteManager) DecodeICMPUDP(payload []byte, HL int) (int, int, error) {
 
 	srcPort := binary.BigEndian.Uint16(payload[HL : HL+2])
 	dstPort := binary.BigEndian.Uint16(payload[HL+2 : HL+4])
@@ -974,7 +974,7 @@ func (tm *TraceTCPManager) DecodeICMPUDP(payload []byte, HL int) (int, int, erro
 //###### GET & SET  #######
 
 //Set the local IPs taking the from the interface used by traceTCPmanager
-func (tm *TraceTCPManager) SetLocalIPs() error {
+func (tm *ServiceTracerouteManager) SetLocalIPs() error {
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
 		return err
@@ -1016,22 +1016,22 @@ func (tm *TraceTCPManager) SetLocalIPs() error {
 }
 
 //Set border routers
-func (tm *TraceTCPManager) SetBorderRouters(borderIPs []net.IP) {
+func (tm *ServiceTracerouteManager) SetBorderRouters(borderIPs []net.IP) {
 	tm.Configuration.BorderIPs = borderIPs
 }
 
 //Add one or an array of border routers
-func (tm *TraceTCPManager) AddBorderRouters(borderIPs ...net.IP) {
+func (tm *ServiceTracerouteManager) AddBorderRouters(borderIPs ...net.IP) {
 	tm.Configuration.BorderIPs = append(tm.Configuration.BorderIPs, borderIPs...)
 }
 
 //Set the services to start automatically traceroute
-func (tm *TraceTCPManager) SetServices(services []ServiceConfiguration) {
+func (tm *ServiceTracerouteManager) SetServices(services []ServiceConfiguration) {
 	tm.Configuration.Services = services
 }
 
 //Add a service to the set of services for the automatic traceroutes
-func (tm *TraceTCPManager) AddService(service ServiceConfiguration) {
+func (tm *ServiceTracerouteManager) AddService(service ServiceConfiguration) {
 	if tm.Configuration.DNSResolver {
 		tm.DNS.UpdateService(service)
 		for i, _ := range tm.Configuration.Services {
@@ -1044,7 +1044,7 @@ func (tm *TraceTCPManager) AddService(service ServiceConfiguration) {
 }
 
 //Remove one service from the set of services for the automatic traceroutes
-func (tm *TraceTCPManager) RemoveService(service ServiceConfiguration) {
+func (tm *ServiceTracerouteManager) RemoveService(service ServiceConfiguration) {
 	if tm.Configuration.DNSResolver {
 		index := -1
 		for i, _ := range tm.Configuration.Services {
@@ -1061,7 +1061,7 @@ func (tm *TraceTCPManager) RemoveService(service ServiceConfiguration) {
 }
 
 //Load border routers from a file
-func (tm *TraceTCPManager) LoadBorderRouters(filename string) error {
+func (tm *ServiceTracerouteManager) LoadBorderRouters(filename string) error {
 	file, err := os.Open(filename)
 
 	if err != nil {
@@ -1084,62 +1084,62 @@ func (tm *TraceTCPManager) LoadBorderRouters(filename string) error {
 }
 
 //Return the list of border routers
-func (tm *TraceTCPManager) GetBorderRouters() []net.IP {
+func (tm *ServiceTracerouteManager) GetBorderRouters() []net.IP {
 	return tm.Configuration.BorderIPs
 }
 
 //Set the stdout channel
-func (tm *TraceTCPManager) SetOutChan(outchan chan string) {
+func (tm *ServiceTracerouteManager) SetOutChan(outchan chan string) {
 	tm.OutChan = outchan
 }
 
 //Return the used stdout channel
-func (tm *TraceTCPManager) GetOutChan() chan string {
+func (tm *ServiceTracerouteManager) GetOutChan() chan string {
 	return tm.OutChan
 }
 
 //Set the channel used for the transmission of packets
-func (tm *TraceTCPManager) SetOutPktsChan(outPktsChan chan []byte) {
+func (tm *ServiceTracerouteManager) SetOutPktsChan(outPktsChan chan []byte) {
 	tm.OutPacketChan = outPktsChan
 }
 
 //Get the channel used for the transmission of packets
-func (tm *TraceTCPManager) GetOutPktsChan() chan []byte {
+func (tm *ServiceTracerouteManager) GetOutPktsChan() chan []byte {
 	return tm.OutPacketChan
 }
 
 //Set the channel used for the sniffing ICMP packets
-func (tm *TraceTCPManager) SetICMPInChan(icmpChan chan gopacket.Packet) {
+func (tm *ServiceTracerouteManager) SetICMPInChan(icmpChan chan gopacket.Packet) {
 	tm.ICMPChan = icmpChan
 }
 
 //Set the channel used for the sniffing TCP packets
-func (tm *TraceTCPManager) SetTCPInChan(tcpChan chan gopacket.Packet) {
+func (tm *ServiceTracerouteManager) SetTCPInChan(tcpChan chan gopacket.Packet) {
 	tm.TCPChan = tcpChan
 }
 
 //Set the channel used for the sniffing UDP packets
-func (tm *TraceTCPManager) SetUDPInChan(udpChan chan gopacket.Packet) {
+func (tm *ServiceTracerouteManager) SetUDPInChan(udpChan chan gopacket.Packet) {
 	tm.UDPChan = udpChan
 }
 
 //Get the channel used for the sniffing ICMP packets
-func (tm *TraceTCPManager) GetICMPInChan() chan gopacket.Packet {
+func (tm *ServiceTracerouteManager) GetICMPInChan() chan gopacket.Packet {
 	return tm.ICMPChan
 }
 
 //Get the channel used for the sniffing TCP packets
-func (tm *TraceTCPManager) GetTCPInChan() chan gopacket.Packet {
+func (tm *ServiceTracerouteManager) GetTCPInChan() chan gopacket.Packet {
 	return tm.TCPChan
 }
 
 //Get the channel used for the sniffing UDP packets
-func (tm *TraceTCPManager) GetUDPInChan() chan gopacket.Packet {
+func (tm *ServiceTracerouteManager) GetUDPInChan() chan gopacket.Packet {
 	return tm.UDPChan
 }
 
 //Convert a port from string to int (in some cases it may contain some text)
-func (tm *TraceTCPManager) ConvertPort(port string) int {
+func (tm *ServiceTracerouteManager) ConvertPort(port string) int {
 	if !strings.Contains(port, "(") {
 		p, _ := strconv.Atoi(port)
 		return p
@@ -1149,7 +1149,7 @@ func (tm *TraceTCPManager) ConvertPort(port string) int {
 }
 
 //Start the DNS resolution using an external channel
-func (tm *TraceTCPManager) StartDNSResolver(dnsChan chan gopacket.Packet) error {
+func (tm *ServiceTracerouteManager) StartDNSResolver(dnsChan chan gopacket.Packet) error {
 	if tm.DNS != nil {
 		tm.OutChan <- "Error while starting dns resolver"
 		return errors.New("DNS Resolver already enabled.")
@@ -1163,7 +1163,7 @@ func (tm *TraceTCPManager) StartDNSResolver(dnsChan chan gopacket.Packet) error 
 }
 
 //Stop the DNS resolution
-func (tm *TraceTCPManager) StopDNSResolver() {
+func (tm *ServiceTracerouteManager) StopDNSResolver() {
 	if tm.DNS == nil {
 		return
 	}
@@ -1172,11 +1172,11 @@ func (tm *TraceTCPManager) StopDNSResolver() {
 }
 
 //Set verbose flag
-func (tm *TraceTCPManager) SetVerbose(verbose bool) {
+func (tm *ServiceTracerouteManager) SetVerbose(verbose bool) {
 	tm.Configuration.Verbose = verbose
 }
 
 //Set the flag to start new traceroute. Used if the goal is to stop new traceroutes for a while
-func (tm *TraceTCPManager) SetStartNewTraceroutes(newTraceroutes bool) {
+func (tm *ServiceTracerouteManager) SetStartNewTraceroutes(newTraceroutes bool) {
 	tm.Configuration.StartAnalysis = newTraceroutes
 }

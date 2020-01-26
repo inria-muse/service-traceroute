@@ -1,4 +1,4 @@
-package tracetcp
+package servicetraceroute
 
 type State struct {
 	Id         int

@@ -1,4 +1,4 @@
-package tracetcp
+package servicetraceroute
 
 import (
 	"encoding/binary"
@@ -557,8 +557,8 @@ func (bt *BufferTrace) AnalyzePackets() {
 }
 
 //Encode the results and configuration in a json format
-func (bt *BufferTrace) PrintLatencies() TraceTCPReport {
-	report := TraceTCPReport{}
+func (bt *BufferTrace) PrintLatencies() ServiceTracerouteReport {
+	report := ServiceTracerouteReport{}
 	report.MaxTtl = bt.MaxTtl
 	report.BorderDistance = bt.BorderDistance
 	report.Iterations = bt.Iter
@@ -712,7 +712,7 @@ func (bt *BufferTrace) ConvertIDfromPktID(pktID uint16) uint16 {
 }
 
 //Run the traceroute: start the analysis thread and then send the probes
-func (bt *BufferTrace) Run() TraceTCPReport {
+func (bt *BufferTrace) Run() ServiceTracerouteReport {
 	if bt.StartTraceroutes {
 		go bt.AnalyzePackets()
 		go bt.StartProbing()

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"tracetcp"
+	"github.com/inria-muse/service-traceroute/pkg/servicetraceroute"
 )
 
 type arrayFlags []string
@@ -25,7 +25,7 @@ func (i *arrayFlags) Set(value string) error {
 
 func checkFlags(version bool, iface string, services arrayFlags, hosts arrayFlags, distance int, iterations int, timeout int, interProbeTime int, interIterationTime int, probingAlgorithm string, maxMissingHops int) {
 	if version {
-		fmt.Printf("%s\n", tracetcp.Version)
+		fmt.Printf("%s\n", servicetraceroute.Version)
 		os.Exit(0)
 	}
 
@@ -57,7 +57,7 @@ func checkFlags(version bool, iface string, services arrayFlags, hosts arrayFlag
 		panic("Negative inter iteration time")
 	}
 
-	if strings.ToLower(probingAlgorithm) != tracetcp.PacketByPacket && strings.ToLower(probingAlgorithm) != tracetcp.HopByHop && strings.ToLower(probingAlgorithm) != tracetcp.Concurrent {
+	if strings.ToLower(probingAlgorithm) != servicetraceroute.PacketByPacket && strings.ToLower(probingAlgorithm) != servicetraceroute.HopByHop && strings.ToLower(probingAlgorithm) != servicetraceroute.Concurrent {
 		panic("Wrong probing algorithm")
 	}
 
@@ -66,7 +66,7 @@ func checkFlags(version bool, iface string, services arrayFlags, hosts arrayFlag
 	}
 }
 
-func traceOut(outChan chan string, resChan chan tracetcp.TraceTCPJson, output string) {
+func traceOut(outChan chan string, resChan chan servicetraceroute.ServiceTracerouteJson, output string) {
 	for {
 		select {
 		case s := <-outChan:
@@ -147,7 +147,7 @@ func main() {
 	flag.StringVar(&iface, "iface", "", "Interface to use")
 
 	var ipVersion string
-	flag.StringVar(&ipVersion, "ipversion", tracetcp.V4, "Version of IP protocol. Now only IPv4 is supported")
+	flag.StringVar(&ipVersion, "ipversion", servicetraceroute.V4, "Version of IP protocol. Now only IPv4 is supported")
 
 	var services arrayFlags
 	flag.Var(&services, "services", "Services to probe")
@@ -221,7 +221,7 @@ func main() {
 	checkFlags(version, iface, services, hosts, distance, iterations, timeout, interProbeTime, interIterationTime, probingAlgorithm, maxMissingHops)
 
 	outChan := make(chan string, 1000)
-	reportChan := make(chan tracetcp.TraceTCPJson, 100)
+	reportChan := make(chan servicetraceroute.ServiceTracerouteJson, 100)
 
 	//Start the thread receiving the results and messages from the library
 	go traceOut(outChan, reportChan, output)
@@ -247,10 +247,10 @@ func main() {
 	}
 
 	//Initialize traceTCP Manager
-	traceTCPManager := new(tracetcp.TraceTCPManager)
+	traceTCPManager := new(servicetraceroute.ServiceTracerouteManager)
 
 	//Set all parameters
-	traceTCPManager.NewTraceTCPManager(iface, ipVersion, sameDestination, samePort, true, true, dns, startTraceroutes, interTraceTime, maxMissingHops, borderIPs, outChan, reportChan)
+	traceTCPManager.NewServiceTracerouteManager(iface, ipVersion, sameDestination, samePort, true, true, dns, startTraceroutes, interTraceTime, maxMissingHops, borderIPs, outChan, reportChan)
 	//Only to show errors
 	traceTCPManager.SetVerbose(verbose)
 
@@ -260,7 +260,7 @@ func main() {
 	//This is done for IPs and URLs, a service is created for each url and all IPs.
 	//It is just enough to specify the name and URLs and IPs matching a specific online service
 	for _, service := range services {
-		traceTCPManager.AddService(tracetcp.ServiceConfiguration{
+		traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
 			ConfHash:             "",
 			Distance:             distance,
 			InterIterationTime:   interIterationTime,
@@ -277,7 +277,7 @@ func main() {
 	//Add urls to analyze
 	//These urls are seen as under a service with the same name as the given url
 	for _, url := range urls {
-		traceTCPManager.AddService(tracetcp.ServiceConfiguration{
+		traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
 			ConfHash:             "",
 			Distance:             distance,
 			InterIterationTime:   interIterationTime,
@@ -295,7 +295,7 @@ func main() {
 
 	//Same for urls but for IPs
 	//In this case, the service is called IPs
-	traceTCPManager.AddService(tracetcp.ServiceConfiguration{
+	traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
 		ConfHash:             "",
 		Distance:             distance,
 		InterIterationTime:   interIterationTime,
@@ -327,7 +327,7 @@ func main() {
 	stopped := false
 	for {
 		now := time.Now().UnixNano()
-		if traceTCPManager.GetNumberOfRunningTraceTCP() > 0 {
+		if traceTCPManager.GetNumberOfRunningServiceTraceroute() > 0 {
 			beginning = time.Now().UnixNano()
 		}
 
