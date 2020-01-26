@@ -11,10 +11,10 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
 
-	"tracetcp"
+	"github.com/inria-muse/service-traceroute/pkg/servicetraceroute"
 )
 
-func traceOut(outChan chan string, resChan chan tracetcp.TraceTCPJson, output string) {
+func traceOut(outChan chan string, resChan chan servicetraceroute.ServiceTracerouteJson, output string) {
 	for {
 		select {
 		case s := <-outChan:
@@ -91,7 +91,7 @@ func sniffer(iface string, tcp chan gopacket.Packet, udp chan gopacket.Packet, i
 	//In this case, for keeping the code as simple as possible, we rely on the same module used by the library
 	//However it can be easily changed with a simple code which sniff the packets from the interface and give them directly to the channels, since they are in the same format of the channel packets
 	//Listeners manage easily multiple sniffers designed for Service Traceroute
-	listeners := new(tracetcp.Listeners)
+	listeners := new(servicetraceroute.Listeners)
 	listeners.NewListeners(iface, outChan)
 	//These functions open a new thread running the sniffer for each protocol
 	listeners.StartTCP(tcp)
@@ -131,7 +131,7 @@ func sender(iface string, outPkt chan []byte) {
 func main() {
 	//Initial configuration required for initializing traceTCPManager
 	iface := "en0"                                       //Interface to use for sniffing and trasmissions
-	ipVersion := tracetcp.V4                             //IP version, now supported only IPv4
+	ipVersion := servicetraceroute.V4                    //IP version, now supported only IPv4
 	sameDestination := true                              //Flag to say if Service Traceroute has to traceroute multiple flows with the same end hosts
 	samePort := true                                     //Flag to say if Service Traceroute should traceroute multiple flows with the same remote port and end hosts
 	startTraceroutes := true                             //Mostly for debug or other purposes. Flag to say whether Service Traceroute should send probes or not. Useful to only discover application flows
@@ -139,22 +139,22 @@ func main() {
 	maxMissingHops := 3                                  //Maximum number of consecutive non replying hops to stop a traceroute
 	services := []string{"netflix", "youtube", "twitch"} //Services that Service Traceroute can traceroute automatically. There are other possible services and others can be added
 
-	outChan := make(chan string, 1000)                  //Channel to send stdout messages
-	reportChan := make(chan tracetcp.TraceTCPJson, 100) //Channel to return the results
+	outChan := make(chan string, 1000)                                    //Channel to send stdout messages
+	reportChan := make(chan servicetraceroute.ServiceTracerouteJson, 100) //Channel to return the results
 
 	go traceOut(outChan, reportChan, "traceroute") //Just an example, it starts a thread used to print text and results on the stdout
 
 	borderIPs := []net.IP{net.ParseIP("1.1.1.1")} //Example of array containing border routers. Border routers stop the traceroute when they are discovered.
 
 	//Initialize a new trace TCP manager
-	traceTCPManager := new(tracetcp.TraceTCPManager)
+	traceTCPManager := new(servicetraceroute.ServiceTracerouteManager)
 
 	startSniffer := false //Set to true to use the sniffer of the library
 	startSender := false  //Set to true to use the sender of the library
 	startDNS := false     //Set to true to use the DNS listener. If set to false, ServiceTraceroute is able only to traceroute IPs
 
 	//Call the constructor to give the initial configuration
-	traceTCPManager.NewTraceTCPManager(iface, ipVersion, sameDestination, samePort, startSniffer, startSender, startDNS, startTraceroutes, interTraceTime, maxMissingHops, borderIPs, outChan, reportChan)
+	traceTCPManager.NewServiceTracerouteManager(iface, ipVersion, sameDestination, samePort, startSniffer, startSender, startDNS, startTraceroutes, interTraceTime, maxMissingHops, borderIPs, outChan, reportChan)
 
 	//Service Traceroute can stop when some IPs are detected. This feature is useful when the traceroute should not go beyond a specific border, to avoid troubles with the receiver or with the network manager
 	//The border routers can be set one by one using AddBorderRouters or in an array when calling the constructor of Service Traceroute
@@ -199,18 +199,18 @@ func main() {
 	//Service Traceroute has the ability to start automatically the traceroute towards specific services like Youtube, Netflix, etc. when new application flows are detected
 	//In order to traceroute them automatically, startDNS must be true
 	//For each service, it is possible to specify the configuration for the traceroutes
-	confHash := "id"                        //Only an hash to identify the results
-	distance := 32                          //Maximum distance to probe
-	interIterationTime := 100               //Time to wait between each iteration (change of TTL) [us]
-	interProbeTime := 100                   //Time to wait between each pair of probe [us]
-	iterations := 3                         //Number of probes per hops
-	probingAlgorithm := tracetcp.Concurrent //Probing algorithm: PacketByPacket send 1 packet and wait a reply, HopByHop send all probes with the same TTL and then wait the replies, Concurrent send all probes at the end and then wait the replies
-	emptyPacket := true                     //Specify whether Service Traceroute can start when an empty packet is detected. Otherwise it is required a packet with a layer 5 payload
-	timeout := 2000                         //Timeout before considering a probe lost [ms]
-	flowTimeout := 60000                    //Maximum time of an idle period before considering a flow dead
+	confHash := "id"                                 //Only an hash to identify the results
+	distance := 32                                   //Maximum distance to probe
+	interIterationTime := 100                        //Time to wait between each iteration (change of TTL) [us]
+	interProbeTime := 100                            //Time to wait between each pair of probe [us]
+	iterations := 3                                  //Number of probes per hops
+	probingAlgorithm := servicetraceroute.Concurrent //Probing algorithm: PacketByPacket send 1 packet and wait a reply, HopByHop send all probes with the same TTL and then wait the replies, Concurrent send all probes at the end and then wait the replies
+	emptyPacket := true                              //Specify whether Service Traceroute can start when an empty packet is detected. Otherwise it is required a packet with a layer 5 payload
+	timeout := 2000                                  //Timeout before considering a probe lost [ms]
+	flowTimeout := 60000                             //Maximum time of an idle period before considering a flow dead
 
 	for _, service := range services {
-		traceTCPManager.AddService(tracetcp.ServiceConfiguration{
+		traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
 			ConfHash:             confHash,
 			Distance:             distance,
 			InterIterationTime:   interIterationTime,
@@ -230,7 +230,7 @@ func main() {
 	urls := make([]string, 0) //URLs to traceroute
 	ips := make([]string, 0)  //IPs to traceroute
 
-	traceTCPManager.AddService(tracetcp.ServiceConfiguration{
+	traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
 		ConfHash:             "",
 		Distance:             distance,
 		InterIterationTime:   interIterationTime,
@@ -249,7 +249,7 @@ func main() {
 	//If there aren't any other traceroute to the same application flow, it will start a new traceroute with the given configuration
 	//It is possible to keep in memory a traceroute for some time, to avoid to run multiple traceroutes to the same target application flow in a small interval of time, set during the initialization of traceTCPManager
 
-	transportProtocol := tracetcp.Tcp //It is possible to specify the transport protocol to use (UDP or TCP). In this way, also application relying on UDP can be probed
+	transportProtocol := servicetraceroute.Tcp //It is possible to specify the transport protocol to use (UDP or TCP). In this way, also application relying on UDP can be probed
 	remoteIP := net.ParseIP("8.8.8.8")
 	remotePort := 403
 	localPort := 12345
@@ -283,7 +283,7 @@ func main() {
 		maxConsecutiveMissingHops, //maximum number of consecutive non replying hops before considering the path fully discovered. 0 means infinity
 	)
 
-	//Start TraceTCPManager listener in order to manage all incoming and outgoing packets
+	//Start ServiceTracerouteManager listener in order to manage all incoming and outgoing packets
 	//If services are added, ST automatically starts traceroute to them when new application flows are detected
 	go traceTCPManager.Run()
 
