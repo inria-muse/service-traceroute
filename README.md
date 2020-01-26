@@ -20,19 +20,19 @@ Then retrieve the source code from this repository. You can easily do so by usin
 go get github.com/inria-muse/service-traceroute
 ``
 
-Change to the folder `$GOPATH/src/github.com/inria-muse/service-traceroute/cmd/servicetraceroute/`. (NOTE: this step assumes that you have set the `$GOPATH` environment variable. If you used the default value, this will correspond to `$HOME/go/`).
+Change to the folder `$GOPATH/src/github.com/inria-muse/service-traceroute/`. (NOTE: this step assumes that you have set the `$GOPATH` environment variable. If you used the default value, this will correspond to `$HOME/go/`).
 
 Then run:
 
 ``
-go build
+./build.sh
 ``
 
-This will create the `servicetraceroute` binary.
+This will create the `servicetraceroute-linux-amd64`. Build support for other architectures requires modifying the file `build.sh`
 
 For help on how to execute a *Service Traceroute* experiment, run:
 
-`./servicetraceroute -h`
+`./build/servicetraceroute-linux-amd64 -h`
 
 
 ### Installation from binary

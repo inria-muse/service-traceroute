@@ -194,11 +194,11 @@ func main() {
 	var startTraceroutes bool
 	flag.BoolVar(&startTraceroutes, "start", true, "Specify whether Service Traceroute has to start the probing phase or not (DEBUGGING).")
 
-	var tracetcpTimeout int
-	flag.IntVar(&tracetcpTimeout, "idle", 0, "Timeout [s] to wait to close Service Traceroute when there are no traceroute running in the background. 0 or negative values means infinite")
+	var servicetracerouteTimeout int
+	flag.IntVar(&servicetracerouteTimeout, "idle", 0, "Timeout [s] to wait to close Service Traceroute when there are no traceroute running in the background. 0 or negative values means infinite")
 
 	var maxLifeTime int
-	flag.IntVar(&maxLifeTime, "lifetime", 0, "Maximum lifetime [s] of tracetcp. 0 or negative values means infinite")
+	flag.IntVar(&maxLifeTime, "lifetime", 0, "Maximum lifetime [s] of servicetraceroute. 0 or negative values means infinite")
 
 	var output string
 	flag.StringVar(&output, "output", "traceroute", "How results are showed: 'traceroute' (default) or 'json'.")
@@ -247,12 +247,12 @@ func main() {
 	}
 
 	//Initialize traceTCP Manager
-	traceTCPManager := new(servicetraceroute.ServiceTracerouteManager)
+	serviceTracerouteManager := new(servicetraceroute.ServiceTracerouteManager)
 
 	//Set all parameters
-	traceTCPManager.NewServiceTracerouteManager(iface, ipVersion, sameDestination, samePort, true, true, dns, startTraceroutes, interTraceTime, maxMissingHops, borderIPs, outChan, reportChan)
+	serviceTracerouteManager.NewServiceTracerouteManager(iface, ipVersion, sameDestination, samePort, true, true, dns, startTraceroutes, interTraceTime, maxMissingHops, borderIPs, outChan, reportChan)
 	//Only to show errors
-	traceTCPManager.SetVerbose(verbose)
+	serviceTracerouteManager.SetVerbose(verbose)
 
 	//Add services to traceroute
 	//Services are online application that can be analyzed automatically without giving urls and ips
@@ -260,7 +260,7 @@ func main() {
 	//This is done for IPs and URLs, a service is created for each url and all IPs.
 	//It is just enough to specify the name and URLs and IPs matching a specific online service
 	for _, service := range services {
-		traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
+		serviceTracerouteManager.AddService(servicetraceroute.ServiceConfiguration{
 			ConfHash:             "",
 			Distance:             distance,
 			InterIterationTime:   interIterationTime,
@@ -277,7 +277,7 @@ func main() {
 	//Add urls to analyze
 	//These urls are seen as under a service with the same name as the given url
 	for _, url := range urls {
-		traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
+		serviceTracerouteManager.AddService(servicetraceroute.ServiceConfiguration{
 			ConfHash:             "",
 			Distance:             distance,
 			InterIterationTime:   interIterationTime,
@@ -295,7 +295,7 @@ func main() {
 
 	//Same for urls but for IPs
 	//In this case, the service is called IPs
-	traceTCPManager.AddService(servicetraceroute.ServiceConfiguration{
+	serviceTracerouteManager.AddService(servicetraceroute.ServiceConfiguration{
 		ConfHash:             "",
 		Distance:             distance,
 		InterIterationTime:   interIterationTime,
@@ -311,7 +311,7 @@ func main() {
 	})
 
 	//Run the listener
-	go traceTCPManager.Run()
+	go serviceTracerouteManager.Run()
 
 	//The next line of codes are used only for the standalone tool to manage the lifecycle of the standalone tool
 	//The tool can stop in 2 different ways:
@@ -321,18 +321,18 @@ func main() {
 
 	//Management of the standalone tool
 	//It only checks the idle time (if >0), maximum lifetime (if >0) and the possibility to stop new traceroutes
-	outChan <- fmt.Sprintf("Starting ServiceTraceroute of %d in an idle state", tracetcpTimeout)
+	outChan <- fmt.Sprintf("Starting ServiceTraceroute of %d in an idle state", servicetracerouteTimeout)
 	start := time.Now().UnixNano()
 	beginning := time.Now().UnixNano()
 	stopped := false
 	for {
 		now := time.Now().UnixNano()
-		if traceTCPManager.GetNumberOfRunningServiceTraceroute() > 0 {
+		if serviceTracerouteManager.GetNumberOfRunningServiceTraceroute() > 0 {
 			beginning = time.Now().UnixNano()
 		}
 
 		//If maximum idle time is reached, exit
-		if time.Duration(now-beginning) > (time.Duration(tracetcpTimeout)*time.Second) && tracetcpTimeout > 0 {
+		if time.Duration(now-beginning) > (time.Duration(servicetracerouteTimeout)*time.Second) && servicetracerouteTimeout > 0 {
 			fmt.Println("Maximum idle time reached")
 			break
 		}
@@ -344,7 +344,7 @@ func main() {
 		}
 		//Do not create new traceroute after an interval of time (if >0)
 		if stopAfter > 0 && (time.Duration(now-start) > time.Duration(stopAfter)*time.Second && !stopped) {
-			traceTCPManager.SetStartNewTraceroutes(false)
+			serviceTracerouteManager.SetStartNewTraceroutes(false)
 			fmt.Println("Stopping new traceroutes")
 			stopped = true
 		}
