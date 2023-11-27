@@ -11,28 +11,20 @@ To analyze the produced data, please refer to the following repository: [service
 To compile, first install eventual missing dependencies:
 
 ``
-go get github.com/google/gopacket
+go mod tidy
 ``
-
-Then retrieve the source code from this repository. You can easily do so by using go's built in management system:
-
-``
-go get github.com/inria-muse/service-traceroute
-``
-
-Change to the folder `$GOPATH/src/github.com/inria-muse/service-traceroute/`. (NOTE: this step assumes that you have set the `$GOPATH` environment variable. If you used the default value, this will correspond to `$HOME/go/`).
 
 Then run:
 
 ``
-./build.sh
+make
 ``
 
-This will create the `servicetraceroute-linux-amd64` inside a build folder. Build support for other architectures requires modifying the file `build.sh`
+This will create the `servicetraceroute` binary.
 
 For help on how to execute a *Service Traceroute* experiment, run:
 
-`./build/servicetraceroute-linux-amd64 -h`
+`./servicetraceroute -h`
 
 
 ### Installation from binary
